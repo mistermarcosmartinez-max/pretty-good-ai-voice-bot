@@ -216,3 +216,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Private environment files; allow the example
+.env.*
+!.env.example
