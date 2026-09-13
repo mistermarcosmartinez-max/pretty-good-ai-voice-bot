@@ -139,6 +139,13 @@ The `/media` WebSocket route does not exist yet, so `create_assessment_call()`
 must not be run yet. Dual-channel recording behavior has not been verified with
 Twilio.
 
+`media_protocol.py` is a pure offline parser and message builder for the Twilio
+Media Streams protocol. It validates the connected, start, inbound media, and
+stop messages and builds media, mark, and clear messages without opening a
+WebSocket or processing audio. Twilio's μ-law/8000 audio format matches OpenAI's
+`audio/pcmu`/8000 format, but no OpenAI connection or audio relay exists yet.
+No audio has been received, generated, stored, or played.
+
 Offline tests use fictional values, generated signatures, mocks, and
 a local ASGI harness. They make no network requests. No live call has been made,
 and provider authentication and end-to-end calling remain unimplemented.
