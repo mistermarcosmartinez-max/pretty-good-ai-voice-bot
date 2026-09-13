@@ -53,3 +53,16 @@ The destination check accepts only the exact approved assessment destination
 and raises `ValueError` for other inputs without correcting or substituting them.
 These offline tests check destination validation in isolation and never dial
 any number. Live calling is not implemented yet.
+
+## Planned configuration
+
+`.env.example` is an empty configuration template for the planned Twilio and
+OpenAI voice bot. Real credentials belong only in an ignored local `.env` file;
+never put them in the template or commit them.
+
+`TWILIO_FROM_NUMBER` is our originating caller-ID number in E.164 format.
+`PUBLIC_BASE_URL` will be our server's public HTTPS address. The assessment
+destination is defined in `call_safety.py` and is not configurable here.
+
+Configuration loading and live calling are not implemented yet. The current
+local health endpoint does not require these settings.
