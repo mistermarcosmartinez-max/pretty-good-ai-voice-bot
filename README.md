@@ -40,3 +40,16 @@ The local `GET /health` test returned HTTP 200 with `{"status":"ok"}`
 using FastAPI 0.141.1 and Uvicorn 0.52.4, with a 3-second request timeout.
 The test server was stopped and its exit confirmed. Voice calling is not
 implemented yet and has not been tested.
+
+## Offline destination-safety tests
+
+Run from the project folder with the existing virtual environment:
+
+```powershell
+& .\.venv\Scripts\python.exe -m unittest discover -s tests -v
+```
+
+The destination check accepts only the exact approved assessment destination
+and raises `ValueError` for other inputs without correcting or substituting them.
+These offline tests check destination validation in isolation and never dial
+any number. Live calling is not implemented yet.
