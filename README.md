@@ -130,9 +130,15 @@ assessment destination immediately before calling Twilio's create method.
 The boundary requests POST callbacks for call progress and recording completion.
 It also requests recording with `recording_channels="dual"` and
 `recording_track="both"`. The generated `/voice`, `/calls/status`, and
-`/recordings/status` webhook routes do not exist yet, so
-`create_assessment_call()` must not be run yet. Dual-channel recording behavior
-has not been verified with Twilio.
+`/recordings/status` webhook routes now exist and are protected with Twilio
+signature validation. They load configuration only when requested. The
+`/voice` route returns `<Connect><Stream>` TwiML with the scenario ID as a custom
+parameter, while the two callback routes validate and discard their data.
 
-Tests use mocks only and make no network requests. No live call has been made,
+The `/media` WebSocket route does not exist yet, so `create_assessment_call()`
+must not be run yet. Dual-channel recording behavior has not been verified with
+Twilio.
+
+Offline tests use fictional values, generated signatures, mocks, and
+a local ASGI harness. They make no network requests. No live call has been made,
 and provider authentication and end-to-end calling remain unimplemented.
