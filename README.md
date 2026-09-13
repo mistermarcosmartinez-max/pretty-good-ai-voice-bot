@@ -153,9 +153,16 @@ VAD, and builds validated `input_audio_buffer.append` events. It also validates
 `response.output_audio.delta` and `input_audio_buffer.speech_started` events
 without decoding, transforming, storing, printing, or logging audio.
 
-This layer constructs and checks plain dictionaries and JSON only. It has not
-been connected to OpenAI, a WebSocket, or the Twilio media protocol, and no
-audio relay exists. The `/media` WebSocket route still does not exist, so
+`audio_relay.py` is a pure offline adapter between the Twilio and OpenAI
+protocol helpers. It converts validated inbound Twilio media into OpenAI audio
+append dictionaries, validated OpenAI audio deltas into Twilio media
+dictionaries, and OpenAI speech-started events into Twilio clear dictionaries
+for future interruption handling. It reuses the protocol modules' public
+parsers and builders and retains no payloads or event data.
+
+These layers construct and check plain dictionaries and JSON only. They do not
+connect to provider services or WebSockets, and no live audio relay loop
+exists. The `/media` WebSocket route still does not exist, so
 `create_assessment_call()` must not be run yet.
 
 Offline tests use fictional values, generated signatures, mocks, and
