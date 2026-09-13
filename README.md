@@ -118,3 +118,21 @@ errors, and prompt instructions without loading configuration or contacting a
 provider. These are fictional offline definitions. They are not completed calls,
 recordings, or discovered bugs, and they have not been connected to a voice
 model or live calling.
+
+## Protected outbound-call boundary
+
+`outbound_call.py` defines an offline-tested boundary for constructing a Twilio
+client and preparing one assessment call. It validates configuration, scenario
+selection, strict E.164 caller-ID formatting, and the public HTTPS base URL. The
+destination is not configurable: the boundary obtains and validates the fixed
+assessment destination immediately before calling Twilio's create method.
+
+The boundary requests POST callbacks for call progress and recording completion.
+It also requests recording with `recording_channels="dual"` and
+`recording_track="both"`. The generated `/voice`, `/calls/status`, and
+`/recordings/status` webhook routes do not exist yet, so
+`create_assessment_call()` must not be run yet. Dual-channel recording behavior
+has not been verified with Twilio.
+
+Tests use mocks only and make no network requests. No live call has been made,
+and provider authentication and end-to-end calling remain unimplemented.
