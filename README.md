@@ -64,7 +64,7 @@ only invalid or missing setting names, never their values.
 This check runs in isolation. It does not validate phone-number or URL formats,
 verify credentials with OpenAI or Twilio, or contact either provider.
 
-## Planned configuration
+## Configuration loading
 
 `.env.example` is an empty configuration template for the planned Twilio and
 OpenAI voice bot. Real credentials belong only in an ignored local `.env` file;
@@ -74,6 +74,20 @@ never put them in the template or commit them.
 `PUBLIC_BASE_URL` will be our server's public HTTPS address. The assessment
 destination is defined in `call_safety.py` and is not configurable here.
 
-`.env` loading, credential authentication, and live calling are not implemented
-yet. The current
-local health endpoint does not require these settings.
+Call `load_settings(env_path=None)` explicitly to load settings. By default it
+reads only `.env` beside `config.py`, regardless of the current directory; it
+does not search parent folders. An explicit path selects that file instead.
+It uses python-dotenv's `dotenv_values` with variable expansion disabled, so
+`${NAME}` references remain literal.
+
+Existing environment variables override file values, including empty or
+whitespace-only values, which fail validation. The loader collects only
+`REQUIRED_SETTINGS`, calls `validate_settings`, and returns the validated
+dictionary without changing `os.environ` or printing setting values. A missing
+file can still succeed if the environment supplies every required setting.
+Nothing is loaded automatically on import.
+
+Offline loader tests use temporary files, fictional values, and an isolated
+environment; they never read the real project `.env`. This is local validation
+only. Provider credential authentication and live calling remain unimplemented.
+The unchanged local health endpoint does not load settings or require credentials.
