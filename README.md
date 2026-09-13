@@ -91,3 +91,18 @@ Offline loader tests use temporary files, fictional values, and an isolated
 environment; they never read the real project `.env`. This is local validation
 only. Provider credential authentication and live calling remain unimplemented.
 The unchanged local health endpoint does not load settings or require credentials.
+
+## Offline fictional-patient scenario
+
+`patient_scenarios.py` defines the first fictional scenario,
+`schedule_routine_visit`. Jordan Lee, born 1990-04-12, wants to schedule a
+routine annual physical and prefers Tuesday or Thursday after 2:00 PM. The
+prompt builder tells a future voice model to speak naturally, reveal only known
+facts as they become relevant, adapt to the healthcare agent, and avoid
+inventing missing personal or medical details. It also prevents claims about a
+real emergency or a real appointment.
+
+The standard offline test command above checks the stored scenario, lookup
+errors, and prompt instructions without loading configuration or contacting a
+provider. This scenario and prompt have not been connected to a voice model or
+a live call.
