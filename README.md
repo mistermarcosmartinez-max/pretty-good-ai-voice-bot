@@ -146,6 +146,18 @@ WebSocket or processing audio. Twilio's μ-law/8000 audio format matches OpenAI'
 `audio/pcmu`/8000 format, but no OpenAI connection or audio relay exists yet.
 No audio has been received, generated, stored, or played.
 
+`openai_realtime_protocol.py` is a pure offline builder and parser for the next
+OpenAI Realtime protocol boundary. It builds an audio-only `session.update`
+from an existing patient scenario, using PCMU at its 8000 Hz rate and semantic
+VAD, and builds validated `input_audio_buffer.append` events. It also validates
+`response.output_audio.delta` and `input_audio_buffer.speech_started` events
+without decoding, transforming, storing, printing, or logging audio.
+
+This layer constructs and checks plain dictionaries and JSON only. It has not
+been connected to OpenAI, a WebSocket, or the Twilio media protocol, and no
+audio relay exists. The `/media` WebSocket route still does not exist, so
+`create_assessment_call()` must not be run yet.
+
 Offline tests use fictional values, generated signatures, mocks, and
 a local ASGI harness. They make no network requests. No live call has been made,
 and provider authentication and end-to-end calling remain unimplemented.
