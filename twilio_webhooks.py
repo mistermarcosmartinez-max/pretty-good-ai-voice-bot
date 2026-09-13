@@ -9,6 +9,8 @@ from config import load_settings
 
 _FORM_CONTENT_TYPE = "application/x-www-form-urlencoded"
 _GENERIC_ERROR = "Request rejected."
+_GENERIC_WEBSOCKET_ERROR = "WebSocket handshake rejected."
+_HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
 
 
 class _FormParameters:
@@ -69,11 +71,72 @@ def _signature_url(base_url, request):
     return f"{url}?{query}" if query else url
 
 
+def _decode_raw_url_component(value, *, require_path=False):
+    if not isinstance(value, bytes):
+        raise ValueError
+    try:
+        decoded = value.decode("ascii")
+    except UnicodeDecodeError:
+        raise ValueError from None
+    if require_path and (not decoded.startswith("/") or not decoded):
+        raise ValueError
+    if any(character.isspace() or ord(character) < 32 for character in decoded):
+        raise ValueError
+    if "#" in decoded or (require_path and "?" in decoded):
+        raise ValueError
+    for index, character in enumerate(decoded):
+        if character == "%" and (
+            index + 2 >= len(decoded)
+            or decoded[index + 1] not in _HEX_DIGITS
+            or decoded[index + 2] not in _HEX_DIGITS
+        ):
+            raise ValueError
+    return decoded
+
+
+def _websocket_signature_url(base_url, websocket):
+    parsed = _public_url_parts(base_url)
+    websocket_base = urlunsplit(parsed._replace(scheme="wss"))
+    raw_path = _decode_raw_url_component(
+        websocket.scope.get("raw_path"), require_path=True
+    )
+    raw_query = _decode_raw_url_component(
+        websocket.scope.get("query_string", b"")
+    )
+    url = f"{websocket_base.rstrip('/')}{raw_path}"
+    return f"{url}?{raw_query}" if raw_query else url
+
+
 def build_media_url(base_url):
     """Derive the media WSS URL while retaining the configured base path."""
     parsed = _public_url_parts(base_url)
     websocket_base = urlunsplit(parsed._replace(scheme="wss"))
     return f"{websocket_base.rstrip('/')}/media"
+
+
+def validate_twilio_websocket_handshake(websocket):
+    """Validate a Twilio WebSocket handshake without changing its lifecycle."""
+    try:
+        settings = load_settings()
+        signature = websocket.headers.get("x-twilio-signature")
+        if not isinstance(signature, str) or not signature.strip():
+            raise ValueError
+        signature_url = _websocket_signature_url(
+            settings["PUBLIC_BASE_URL"], websocket
+        )
+        valid = RequestValidator(settings["TWILIO_AUTH_TOKEN"]).validate(
+            signature_url,
+            {},
+            signature,
+        )
+        if not valid:
+            raise ValueError
+        return {
+            "OPENAI_API_KEY": settings["OPENAI_API_KEY"],
+            "TWILIO_ACCOUNT_SID": settings["TWILIO_ACCOUNT_SID"],
+        }
+    except Exception:
+        raise ValueError(_GENERIC_WEBSOCKET_ERROR) from None
 
 
 async def validate_twilio_webhook(request):

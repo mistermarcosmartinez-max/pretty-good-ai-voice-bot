@@ -135,6 +135,14 @@ signature validation. They load configuration only when requested. The
 `/voice` route returns `<Connect><Stream>` TwiML with the scenario ID as a custom
 parameter, while the two callback routes validate and discard their data.
 
+`twilio_webhooks.py` also provides an offline-tested validation boundary for a
+future Twilio Media Streams WebSocket handshake. When explicitly called, it
+loads settings, reconstructs the externally visible WSS URL from the configured
+public HTTPS base URL plus the exact raw request path and query string, and
+validates `X-Twilio-Signature` with no form parameters. It returns only the
+OpenAI API key and Twilio account SID needed by the future media route and does
+not accept or close the WebSocket.
+
 The `/media` WebSocket route does not exist yet, so `create_assessment_call()`
 must not be run yet. Dual-channel recording behavior has not been verified with
 Twilio.
@@ -143,7 +151,7 @@ Twilio.
 Media Streams protocol. It validates the connected, start, inbound media, and
 stop messages and builds media, mark, and clear messages without opening a
 WebSocket or processing audio. Twilio's μ-law/8000 audio format matches OpenAI's
-`audio/pcmu`/8000 format, but no OpenAI connection or audio relay exists yet.
+`audio/pcmu`/8000 format, but no OpenAI connection or live audio relay exists yet.
 No audio has been received, generated, stored, or played.
 
 `openai_realtime_protocol.py` is a pure offline builder and parser for the next
@@ -162,8 +170,7 @@ parsers and builders and retains no payloads or event data.
 
 These layers construct and check plain dictionaries and JSON only. They do not
 connect to provider services or WebSockets, and no live audio relay loop
-exists. The `/media` WebSocket route still does not exist, so
-`create_assessment_call()` must not be run yet.
+exists.
 
 Offline tests use fictional values, generated signatures, mocks, and
 a local ASGI harness. They make no network requests. No live call has been made,
