@@ -41,7 +41,7 @@ using FastAPI 0.141.1 and Uvicorn 0.52.4, with a 3-second request timeout.
 The test server was stopped and its exit confirmed. Voice calling is not
 implemented yet and has not been tested.
 
-## Offline destination-safety tests
+## Offline tests
 
 Run from the project folder with the existing virtual environment:
 
@@ -54,6 +54,16 @@ and raises `ValueError` for other inputs without correcting or substituting them
 These offline tests check destination validation in isolation and never dial
 any number. Live calling is not implemented yet.
 
+The same command runs the configuration tests with fictional values.
+`config.py` provides `validate_settings(settings)`, which checks that a supplied
+dictionary contains nonempty, non-whitespace strings for `OPENAI_API_KEY`,
+`TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER`, and
+`PUBLIC_BASE_URL`. It returns `None` on success or raises `ValueError` listing
+only invalid or missing setting names, never their values.
+
+This check runs in isolation. It does not validate phone-number or URL formats,
+verify credentials with OpenAI or Twilio, or contact either provider.
+
 ## Planned configuration
 
 `.env.example` is an empty configuration template for the planned Twilio and
@@ -64,5 +74,6 @@ never put them in the template or commit them.
 `PUBLIC_BASE_URL` will be our server's public HTTPS address. The assessment
 destination is defined in `call_safety.py` and is not configurable here.
 
-Configuration loading and live calling are not implemented yet. The current
+`.env` loading, credential authentication, and live calling are not implemented
+yet. The current
 local health endpoint does not require these settings.
