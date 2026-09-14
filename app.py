@@ -1,7 +1,15 @@
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import (
+    FastAPI,
+    HTTPException,
+    Request,
+    Response,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.responses import Response as ContentResponse
 from twilio.twiml.voice_response import VoiceResponse
 
+import media_protocol
 import twilio_webhooks
 from patient_scenarios import get_scenario
 
@@ -39,3 +47,53 @@ async def call_status(request: Request):
 async def recording_status(request: Request):
     await twilio_webhooks.validate_twilio_webhook(request)
     return Response(status_code=204)
+
+
+@app.websocket("/media")
+async def media(websocket: WebSocket):
+    try:
+        settings = twilio_webhooks.validate_twilio_websocket_handshake(websocket)
+    except ValueError:
+        await websocket.close(code=1008)
+        return
+
+    try:
+        account_sid = settings["TWILIO_ACCOUNT_SID"]
+    except Exception:
+        del settings
+        await websocket.close(code=1011)
+        return
+    del settings
+
+    await websocket.accept()
+    try:
+        session = media_protocol.MediaProtocolSession(account_sid)
+    except Exception:
+        await websocket.close(code=1011)
+        return
+    del account_sid
+
+    while True:
+        try:
+            message = await websocket.receive_text()
+        except WebSocketDisconnect:
+            return
+        except Exception:
+            await websocket.close(code=1011)
+            return
+
+        try:
+            try:
+                is_stop = session.process_message(message) is None
+            finally:
+                del message
+        except ValueError:
+            await websocket.close(code=1008)
+            return
+        except Exception:
+            await websocket.close(code=1011)
+            return
+
+        if is_stop:
+            await websocket.close(code=1000)
+            return

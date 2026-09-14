@@ -136,16 +136,22 @@ signature validation. They load configuration only when requested. The
 parameter, while the two callback routes validate and discard their data.
 
 `twilio_webhooks.py` also provides an offline-tested validation boundary for a
-future Twilio Media Streams WebSocket handshake. When explicitly called, it
+Twilio Media Streams WebSocket handshake. When explicitly called, it
 loads settings, reconstructs the externally visible WSS URL from the configured
 public HTTPS base URL plus the exact raw request path and query string, and
 validates `X-Twilio-Signature` with no form parameters. It returns only the
-OpenAI API key and Twilio account SID needed by the future media route and does
+OpenAI API key and Twilio account SID needed by the media route shell and does
 not accept or close the WebSocket.
 
-The `/media` WebSocket route does not exist yet, so `create_assessment_call()`
-must not be run yet. Dual-channel recording behavior has not been verified with
-Twilio.
+The `/media` WebSocket route now exists as an offline-tested, Twilio-only
+validation shell. It validates the signed handshake before acceptance, then
+uses `MediaProtocolSession` to enforce and discard the connected, start, media,
+and stop sequence. It retains only validated routing metadata for the duration
+of the connection, releases raw messages and audio payloads before the next
+read, and persists no call or message data. It does not connect to OpenAI or
+relay audio. `create_assessment_call()` must not be run yet. Dual-channel
+recording behavior has not been verified with Twilio, and end-to-end calling
+remains unimplemented.
 
 `media_protocol.py` is a pure offline parser and message builder for the Twilio
 Media Streams protocol. It validates the connected, start, inbound media, and
@@ -168,10 +174,10 @@ dictionaries, and OpenAI speech-started events into Twilio clear dictionaries
 for future interruption handling. It reuses the protocol modules' public
 parsers and builders and retains no payloads or event data.
 
-These layers construct and check plain dictionaries and JSON only. They do not
-connect to provider services or WebSockets, and no live audio relay loop
-exists.
+The protocol and relay helpers construct and check plain dictionaries and JSON
+only. They do not initiate provider connections or outbound WebSockets, and no
+live audio relay loop exists.
 
 Offline tests use fictional values, generated signatures, mocks, and
 a local ASGI harness. They make no network requests. No live call has been made,
-and provider authentication and end-to-end calling remain unimplemented.
+and OpenAI provider authentication and end-to-end calling remain unimplemented.
