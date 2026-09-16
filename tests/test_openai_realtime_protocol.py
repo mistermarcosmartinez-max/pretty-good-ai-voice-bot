@@ -70,6 +70,21 @@ class OpenAIRealtimeProtocolTests(unittest.TestCase):
         self.assertEqual(instructions.count(scenario.opening_line), 1)
         self.assertNotIn("scenario_id", event["session"])
 
+    def test_session_includes_duration_and_followup_instructions(self):
+        instructions = build_session_update(
+            self.scenario_id, self.model, self.voice
+        )["session"]["instructions"]
+        self.assertIn("90 to 150 seconds", instructions)
+        self.assertIn("appropriate follow-up questions", instructions)
+        self.assertIn("confirm the outcome or next step", instructions)
+        self.assertIn("Do not repeat yourself, stall, or use filler", instructions)
+        self.assertIn("Preserve natural turn-taking pauses", instructions)
+        self.assertIn("never interrupt or talk over it", instructions)
+        self.assertIn("Silence while\nlistening is acceptable", instructions)
+        self.assertIn(
+            "duration target does not mean continuous speech", instructions
+        )
+
     def test_all_supported_voices_are_accepted(self):
         self.assertEqual(
             SUPPORTED_VOICES,

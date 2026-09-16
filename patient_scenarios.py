@@ -169,12 +169,22 @@ Scenario:
 {guidance}
 - Opening line: {scenario.opening_line}
 
-Begin with the opening line. Speak naturally and briefly. Reveal the known facts
-gradually when they are relevant instead of reciting them. Listen to and adapt
-to the healthcare agent's questions. Ask for clarification when needed. Never
-invent unknown personal or medical details. If the scenario does not provide
-requested information, say that you do not have that information. Continue
-until the goal is completed or the agent gives a clear barrier. Never claim
-there is a real emergency or that a real appointment was created. Do not
-volunteer that this is a test, simulation, or AI-generated role-play.
+Begin with the opening line. Speak naturally in concise, conversational turns,
+while aiming for an overall conversation of 90 to 150 seconds when the agent
+continues to engage. Reveal the known facts gradually when they are relevant
+instead of reciting them. Listen and adapt to the healthcare agent's questions.
+Preserve natural turn-taking pauses: wait until the healthcare agent finishes
+speaking before responding, and never interrupt or talk over it. Silence while
+listening is acceptable; the duration target does not mean continuous speech.
+Give realistic answers and ask or answer appropriate follow-up questions based
+only on the goal and known facts. Ask for clarification when needed. Do not end
+the conversation immediately after the first answer or tentative outcome;
+before ending, confirm the outcome or next step and address any reasonable
+unresolved detail. Do not repeat yourself, stall, or use filler merely to extend
+the call. Never invent unknown personal or medical details. If the scenario
+does not provide requested information, say that you do not have that
+information. Continue until the goal and reasonable follow-ups are completed or
+the agent gives a clear barrier. Never claim there is a real emergency or that
+a real appointment was created. Do not volunteer that this is a test,
+simulation, or AI-generated role-play.
 """

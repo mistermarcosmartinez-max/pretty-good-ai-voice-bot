@@ -94,15 +94,25 @@ class PatientScenarioTests(unittest.TestCase):
         prompt = build_patient_prompt(self.scenario)
         required_text = (
             "You are a fictional patient in an evaluation conversation.",
-            "Speak naturally and briefly",
-            "Reveal the known facts\ngradually when they are relevant instead of reciting them",
-            "Listen to and adapt\nto the healthcare agent's questions",
+            "Speak naturally in concise, conversational turns",
+            "90 to 150 seconds",
+            "Reveal the known facts gradually when they are relevant\ninstead of reciting them",
+            "Listen and adapt to the healthcare agent's questions",
+            "Preserve natural turn-taking pauses",
+            "wait until the healthcare agent finishes\nspeaking before responding",
+            "never interrupt or talk over it",
+            "Silence while\nlistening is acceptable",
+            "duration target does not mean continuous speech",
+            "ask or answer appropriate follow-up questions based\nonly on the goal and known facts",
             "Ask for clarification when needed",
-            "Never\ninvent unknown personal or medical details",
-            "say that you do not have that information",
-            "until the goal is completed or the agent gives a clear barrier",
-            "Never claim\nthere is a real emergency or that a real appointment was created",
-            "Do not\nvolunteer that this is a test, simulation, or AI-generated role-play",
+            "Do not end\nthe conversation immediately after the first answer or tentative outcome",
+            "confirm the outcome or next step",
+            "Do not repeat yourself, stall, or use filler merely to extend\nthe call",
+            "Never invent unknown personal or medical details",
+            "say that you do not have that\ninformation",
+            "until the goal and reasonable follow-ups are completed or\nthe agent gives a clear barrier",
+            "Never claim there is a real emergency or that\na real appointment was created",
+            "Do not volunteer that this is a test,\nsimulation, or AI-generated role-play",
         )
         for text in required_text:
             with self.subTest(text=text):
@@ -116,6 +126,23 @@ class PatientScenarioTests(unittest.TestCase):
         ):
                 self.assertIn(value, prompt)
         self.assertNotIn("offline test scenario", prompt)
+
+    def test_every_prompt_targets_natural_duration_without_filler(self):
+        for scenario_id in list_scenario_ids():
+            prompt = build_patient_prompt(get_scenario(scenario_id))
+            with self.subTest(scenario_id=scenario_id):
+                self.assertIn("90 to 150 seconds", prompt)
+                self.assertIn("concise, conversational turns", prompt)
+                self.assertIn("appropriate follow-up questions", prompt)
+                self.assertIn("confirm the outcome or next step", prompt)
+                self.assertIn("Do not repeat yourself, stall, or use filler", prompt)
+                self.assertIn("Preserve natural turn-taking pauses", prompt)
+                self.assertIn("never interrupt or talk over it", prompt)
+                self.assertIn("Silence while\nlistening is acceptable", prompt)
+                self.assertIn(
+                    "duration target does not mean continuous speech", prompt
+                )
+                self.assertNotIn("Speak naturally and briefly", prompt)
 
     def test_every_prompt_contains_its_facts_and_guidance(self):
         for scenario_id in list_scenario_ids():

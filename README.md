@@ -183,8 +183,8 @@ WebSocket connector and opens the fixed OpenAI Realtime URL with an
 does not send or receive WebSocket messages. Tests inject fictional connectors,
 so this boundary has not contacted OpenAI and provider authentication remains
 unverified. The route now invokes this boundary in code, but route tests patch
-it before invocation. The pinned `websockets==17.0.1` dependency remains
-uninstalled.
+it before invocation. The pinned `websockets==17.0.1` dependency is installed
+in the existing project virtual environment.
 
 The protocol and relay helpers still only construct and check plain
 dictionaries and JSON. `realtime_bridge.py` adds an offline-tested,
