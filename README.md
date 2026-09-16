@@ -184,8 +184,16 @@ unverified. The `/media` route remains Twilio-only and does not import or invoke
 this connection boundary.
 
 The protocol and relay helpers still only construct and check plain
-dictionaries and JSON. No live audio relay loop exists, and the connection
-boundary has not been integrated with them or with an application route.
+dictionaries and JSON. `realtime_bridge.py` adds an offline-tested,
+bidirectional relay for two already-open, caller-owned WebSockets. It uses the
+existing protocol session, scenario lookup, session-event builder, and audio
+adapters to coordinate both directions, including interruption clearing, and
+cleans up its internal tasks when either direction ends. The bridge does not
+create, authenticate, accept, or close either connection.
+
+The bridge remains unintegrated. The `/media` route is still Twilio-only and
+does not invoke the OpenAI connection boundary or the bridge. No OpenAI
+connection or live audio relay has occurred.
 
 Offline tests use fictional values, generated signatures, mocks, and
 a local ASGI harness. They make no network requests. No live call has been made,
