@@ -9,7 +9,8 @@ from fastapi import (
 from fastapi.responses import Response as ContentResponse
 from twilio.twiml.voice_response import VoiceResponse
 
-import media_protocol
+import openai_realtime_connection
+import realtime_bridge
 import twilio_webhooks
 from patient_scenarios import get_scenario
 
@@ -58,42 +59,88 @@ async def media(websocket: WebSocket):
         return
 
     try:
-        account_sid = settings["TWILIO_ACCOUNT_SID"]
+        api_key, account_sid = (
+            settings["OPENAI_API_KEY"],
+            settings["TWILIO_ACCOUNT_SID"],
+        )
     except Exception:
         del settings
         await websocket.close(code=1011)
         return
-    del settings
 
-    await websocket.accept()
     try:
-        session = media_protocol.MediaProtocolSession(account_sid)
-    except Exception:
-        await websocket.close(code=1011)
+        await websocket.accept()
+    except WebSocketDisconnect:
+        del api_key
+        del account_sid
+        del settings
         return
+    except Exception:
+        del api_key
+        del account_sid
+        del settings
+        try:
+            await websocket.close(code=1011)
+        except Exception:
+            pass
+        return
+
+    openai_connection = None
+    setup_failed = False
+    try:
+        openai_connection = (
+            await openai_realtime_connection.create_openai_realtime_connection(
+                api_key
+            )
+        )
+    except Exception:
+        setup_failed = True
+    finally:
+        del api_key
+        del settings
+
+    if setup_failed:
+        del account_sid
+        try:
+            await websocket.close(code=1011)
+        except Exception:
+            pass
+        return
+
+    close_code = None
+    peer_disconnected = False
+    bridge_operation = realtime_bridge.bridge_realtime_audio(
+        websocket, openai_connection, account_sid
+    )
     del account_sid
-
-    while True:
+    try:
         try:
-            message = await websocket.receive_text()
-        except WebSocketDisconnect:
-            return
+            bridge_result = await bridge_operation
+        except realtime_bridge.RealtimeBridgeProtocolError:
+            close_code = 1008
         except Exception:
-            await websocket.close(code=1011)
-            return
-
+            close_code = 1011
+        else:
+            if bridge_result == "stopped":
+                close_code = 1000
+            elif bridge_result == "disconnected":
+                peer_disconnected = True
+            else:
+                close_code = 1011
+            del bridge_result
+    finally:
+        del bridge_operation
         try:
-            try:
-                is_stop = session.process_message(message) is None
-            finally:
-                del message
-        except ValueError:
-            await websocket.close(code=1008)
-            return
+            await openai_connection.close()
         except Exception:
-            await websocket.close(code=1011)
-            return
+            pass
+        del openai_connection
 
-        if is_stop:
-            await websocket.close(code=1000)
-            return
+    if peer_disconnected:
+        return
+    try:
+        await websocket.close(code=close_code)
+    except WebSocketDisconnect:
+        return
+    except Exception:
+        return

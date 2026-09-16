@@ -1,5 +1,6 @@
 import asyncio
 import importlib
+import inspect
 import json
 import unittest
 from unittest.mock import patch
@@ -12,22 +13,32 @@ from realtime_bridge import bridge_realtime_audio
 
 
 class FakeTwilioWebSocket:
-    def __init__(self, messages):
+    def __init__(self, messages, receive_observer=None):
         self.messages = list(messages)
         self.sent = []
         self.receive_count = 0
         self.accept_count = 0
         self.close_count = 0
-        self._blocked = asyncio.Event()
+        self.receive_observer = receive_observer
+        self._available = asyncio.Event()
+        if self.messages:
+            self._available.set()
 
     async def receive_text(self):
         self.receive_count += 1
-        if self.messages:
-            message = self.messages.pop(0)
-            if message is WebSocketDisconnect:
-                raise WebSocketDisconnect(code=1000)
-            return message
-        await self._blocked.wait()
+        if self.receive_observer is not None:
+            self.receive_observer(self.receive_count)
+        while not self.messages:
+            self._available.clear()
+            await self._available.wait()
+        message = self.messages.pop(0)
+        if message is WebSocketDisconnect:
+            raise WebSocketDisconnect(code=1000)
+        return message
+
+    def add_message(self, message):
+        self.messages.append(message)
+        self._available.set()
 
     async def send_text(self, message):
         self.sent.append(message)
@@ -40,11 +51,18 @@ class FakeTwilioWebSocket:
 
 
 class FakeOpenAIConnection:
-    def __init__(self, messages=(), end_when_empty=False, send_error=None):
+    def __init__(
+        self,
+        messages=(),
+        end_when_empty=False,
+        send_error=None,
+        on_empty=None,
+    ):
         self.messages = list(messages)
         self.sent = []
         self.end_when_empty = end_when_empty
         self.send_error = send_error
+        self.on_empty = on_empty
         self.close_count = 0
         self._blocked = asyncio.Event()
 
@@ -61,6 +79,10 @@ class FakeOpenAIConnection:
             return self.messages.pop(0)
         if self.end_when_empty:
             raise StopAsyncIteration
+        if self.on_empty is not None:
+            on_empty = self.on_empty
+            self.on_empty = None
+            on_empty()
         await self._blocked.wait()
 
     async def close(self):
@@ -131,7 +153,9 @@ class RealtimeBridgeTests(unittest.TestCase):
         )
 
     def run_bridge(self, twilio, openai):
-        asyncio.run(bridge_realtime_audio(twilio, openai, self.account_sid))
+        return asyncio.run(
+            bridge_realtime_audio(twilio, openai, self.account_sid)
+        )
 
     def test_start_sends_exactly_one_session_update(self):
         twilio = FakeTwilioWebSocket(
@@ -139,8 +163,9 @@ class RealtimeBridgeTests(unittest.TestCase):
         )
         openai = FakeOpenAIConnection()
 
-        self.run_bridge(twilio, openai)
+        result = self.run_bridge(twilio, openai)
 
+        self.assertEqual(result, "stopped")
         self.assertEqual(len(openai.sent), 1)
         event = json.loads(openai.sent[0])
         self.assertEqual(event["type"], "session.update")
@@ -176,7 +201,9 @@ class RealtimeBridgeTests(unittest.TestCase):
 
     def test_openai_audio_delta_sends_twilio_media(self):
         twilio = FakeTwilioWebSocket((self.connected(), self.start()))
-        openai = FakeOpenAIConnection((self.delta(),), end_when_empty=True)
+        openai = FakeOpenAIConnection(
+            (self.delta(),), on_empty=lambda: twilio.add_message(self.stop())
+        )
 
         self.run_bridge(twilio, openai)
 
@@ -194,7 +221,8 @@ class RealtimeBridgeTests(unittest.TestCase):
     def test_speech_started_sends_twilio_clear(self):
         twilio = FakeTwilioWebSocket((self.connected(), self.start()))
         openai = FakeOpenAIConnection(
-            (self.speech_started(),), end_when_empty=True
+            (self.speech_started(),),
+            on_empty=lambda: twilio.add_message(self.stop()),
         )
 
         self.run_bridge(twilio, openai)
@@ -208,11 +236,13 @@ class RealtimeBridgeTests(unittest.TestCase):
         unused = json.dumps({"type": "response.created", "response": {}})
         twilio = FakeTwilioWebSocket((self.connected(), self.start()))
         openai = FakeOpenAIConnection(
-            (unused, self.delta()), end_when_empty=True
+            (unused, self.delta()),
+            on_empty=lambda: twilio.add_message(self.stop()),
         )
 
-        self.run_bridge(twilio, openai)
+        result = self.run_bridge(twilio, openai)
 
+        self.assertEqual(result, "stopped")
         self.assertEqual(len(twilio.sent), 1)
         self.assertEqual(json.loads(twilio.sent[0])["event"], "media")
 
@@ -227,10 +257,48 @@ class RealtimeBridgeTests(unittest.TestCase):
         )
         openai = FakeOpenAIConnection()
 
-        self.run_bridge(twilio, openai)
+        result = self.run_bridge(twilio, openai)
 
+        self.assertEqual(result, "stopped")
         self.assertEqual(twilio.receive_count, 3)
         self.assertEqual(len(twilio.messages), 1)
+
+    def test_raw_media_is_released_before_next_receive(self):
+        raw_media = self.media(self.payload_one)
+        observations = []
+
+        def observe_receive(receive_count):
+            frame = inspect.currentframe()
+            relay_locals = None
+            try:
+                while frame is not None:
+                    if frame.f_code.co_name == "relay_twilio_to_openai":
+                        relay_locals = frame.f_locals
+                        break
+                    frame = frame.f_back
+                observations.append(
+                    (
+                        receive_count,
+                        relay_locals is not None,
+                        relay_locals is not None and "message" in relay_locals,
+                        relay_locals is not None
+                        and raw_media in relay_locals.values(),
+                        relay_locals is not None
+                        and self.payload_one in relay_locals.values(),
+                    )
+                )
+            finally:
+                del relay_locals
+                del frame
+
+        twilio = FakeTwilioWebSocket(
+            (self.connected(), self.start(), raw_media, self.stop()),
+            receive_observer=observe_receive,
+        )
+        self.run_bridge(twilio, FakeOpenAIConnection())
+
+        before_stop = next(item for item in observations if item[0] == 4)
+        self.assertEqual(before_stop, (4, True, False, False, False))
 
     def test_twilio_disconnect_finishes_cleanly(self):
         twilio = FakeTwilioWebSocket(
@@ -238,12 +306,13 @@ class RealtimeBridgeTests(unittest.TestCase):
         )
         openai = FakeOpenAIConnection()
 
-        self.run_bridge(twilio, openai)
+        result = self.run_bridge(twilio, openai)
 
+        self.assertEqual(result, "disconnected")
         self.assertEqual(twilio.receive_count, 3)
 
-    def assert_private_failure(self, twilio, openai):
-        with self.assertRaises(ValueError) as raised:
+    def assert_private_failure(self, twilio, openai, exception_type):
+        with self.assertRaises(exception_type) as raised:
             self.run_bridge(twilio, openai)
         self.assertEqual(str(raised.exception), "Realtime audio bridge failed.")
         self.assertIsNone(raised.exception.__cause__)
@@ -259,8 +328,47 @@ class RealtimeBridgeTests(unittest.TestCase):
 
     def test_invalid_twilio_order_fails_privately(self):
         self.assert_private_failure(
-            FakeTwilioWebSocket((self.start(),)), FakeOpenAIConnection()
+            FakeTwilioWebSocket((self.start(),)),
+            FakeOpenAIConnection(),
+            realtime_bridge.RealtimeBridgeProtocolError,
         )
+
+    def test_unknown_scenario_lookup_fails_privately_as_protocol_error(self):
+        unknown_scenario_id = "unknown-scenario-private-sentinel"
+
+        class ScenarioPassthroughSession:
+            def __init__(self, stream_sid, call_sid):
+                self.stream_sid = stream_sid
+                self.call_sid = call_sid
+
+            def process_message(self, _message):
+                return realtime_bridge.media_protocol.StartResult(
+                    stream_sid=self.stream_sid,
+                    call_sid=self.call_sid,
+                    scenario_id=unknown_scenario_id,
+                )
+
+        with patch.object(
+            realtime_bridge.media_protocol,
+            "MediaProtocolSession",
+            return_value=ScenarioPassthroughSession(
+                self.stream_sid, self.call_sid
+            ),
+        ):
+            with self.assertRaises(
+                realtime_bridge.RealtimeBridgeProtocolError
+            ) as raised:
+                self.run_bridge(
+                    FakeTwilioWebSocket((self.start(),)),
+                    FakeOpenAIConnection(),
+                )
+
+        self.assertEqual(str(raised.exception), "Realtime audio bridge failed.")
+        self.assertNotIn(unknown_scenario_id, str(raised.exception))
+        self.assertIsNone(raised.exception.__cause__)
+        self.assertIsNone(raised.exception.__context__)
+        self.assertNotIn(unknown_scenario_id, vars(realtime_bridge).values())
+        self.assertEqual(bridge_realtime_audio.__dict__, {})
 
     def test_malformed_supported_openai_events_fail_privately(self):
         malformed_events = (
@@ -280,6 +388,7 @@ class RealtimeBridgeTests(unittest.TestCase):
                 self.assert_private_failure(
                     FakeTwilioWebSocket((self.connected(), self.start())),
                     FakeOpenAIConnection((message,), end_when_empty=True),
+                    realtime_bridge.RealtimeBridgeInternalError,
                 )
 
     def test_unexpected_send_failure_fails_privately(self):
@@ -288,6 +397,7 @@ class RealtimeBridgeTests(unittest.TestCase):
             FakeOpenAIConnection(
                 send_error=RuntimeError("private-provider-detail")
             ),
+            realtime_bridge.RealtimeBridgeInternalError,
         )
 
     def test_internal_tasks_are_cleaned_up(self):
@@ -383,7 +493,8 @@ class RealtimeBridgeTests(unittest.TestCase):
         speech_started = self.speech_started()
         twilio = FakeTwilioWebSocket((self.connected(), self.start()))
         openai = FakeOpenAIConnection(
-            (delta, speech_started), end_when_empty=True
+            (delta, speech_started),
+            on_empty=lambda: twilio.add_message(self.stop()),
         )
 
         with (

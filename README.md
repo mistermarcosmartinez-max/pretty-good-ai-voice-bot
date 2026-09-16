@@ -140,18 +140,20 @@ Twilio Media Streams WebSocket handshake. When explicitly called, it
 loads settings, reconstructs the externally visible WSS URL from the configured
 public HTTPS base URL plus the exact raw request path and query string, and
 validates `X-Twilio-Signature` with no form parameters. It returns only the
-OpenAI API key and Twilio account SID needed by the media route shell and does
-not accept or close the WebSocket.
+OpenAI API key and Twilio account SID needed by the media route and does not
+accept or close the WebSocket.
 
-The `/media` WebSocket route now exists as an offline-tested, Twilio-only
-validation shell. It validates the signed handshake before acceptance, then
-uses `MediaProtocolSession` to enforce and discard the connected, start, media,
-and stop sequence. It retains only validated routing metadata for the duration
-of the connection, releases raw messages and audio payloads before the next
-read, and persists no call or message data. It does not connect to OpenAI or
-relay audio. `create_assessment_call()` must not be run yet. Dual-channel
-recording behavior has not been verified with Twilio, and end-to-end calling
-remains unimplemented.
+The `/media` WebSocket route is now wired in code to the OpenAI Realtime
+connection boundary and bidirectional bridge. It validates the signed Twilio
+handshake before acceptance, opens the OpenAI connection through the existing
+factory, delegates protocol and audio handling to the bridge, and closes the
+OpenAI connection when the bridge ends. It uses private close-code mapping for
+invalid Twilio messages, provider or internal failures, valid stop events, and
+peer disconnects. Local route tests replace both boundaries with fakes, so the
+wiring has not opened either provider connection or relayed real audio.
+
+`create_assessment_call()` must not be run yet. Dual-channel recording behavior
+has not been verified with Twilio, and end-to-end calling remains unimplemented.
 
 `media_protocol.py` is a pure offline parser and message builder for the Twilio
 Media Streams protocol. It validates the connected, start, inbound media, and
@@ -180,8 +182,9 @@ WebSocket connector and opens the fixed OpenAI Realtime URL with an
 `Authorization: Bearer` header. It only returns the resulting connection; it
 does not send or receive WebSocket messages. Tests inject fictional connectors,
 so this boundary has not contacted OpenAI and provider authentication remains
-unverified. The `/media` route remains Twilio-only and does not import or invoke
-this connection boundary.
+unverified. The route now invokes this boundary in code, but route tests patch
+it before invocation. The pinned `websockets==17.0.1` dependency remains
+uninstalled.
 
 The protocol and relay helpers still only construct and check plain
 dictionaries and JSON. `realtime_bridge.py` adds an offline-tested,
@@ -191,9 +194,10 @@ adapters to coordinate both directions, including interruption clearing, and
 cleans up its internal tasks when either direction ends. The bridge does not
 create, authenticate, accept, or close either connection.
 
-The bridge remains unintegrated. The `/media` route is still Twilio-only and
-does not invoke the OpenAI connection boundary or the bridge. No OpenAI
-connection or live audio relay has occurred.
+The `/media` route now invokes the bridge in code after the fake-tested
+connection step. This integration is covered only with a local ASGI harness,
+fake OpenAI connections, and a patched bridge. No provider authentication,
+live OpenAI connection, real WebSocket relay, or call has occurred.
 
 Offline tests use fictional values, generated signatures, mocks, and
 a local ASGI harness. They make no network requests. No live call has been made,

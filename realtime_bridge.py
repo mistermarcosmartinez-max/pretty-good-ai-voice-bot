@@ -14,29 +14,48 @@ _REALTIME_VOICE = "marin"
 _BRIDGE_ERROR = "Realtime audio bridge failed."
 
 
+class RealtimeBridgeProtocolError(ValueError):
+    """Indicate a private Twilio client-protocol failure."""
+
+
+class RealtimeBridgeInternalError(RuntimeError):
+    """Indicate a private provider or internal bridge failure."""
+
+
 async def bridge_realtime_audio(
     twilio_websocket, openai_connection, twilio_account_sid
 ):
-    """Relay validated audio events across two already-open connections."""
+    """Relay audio and return the clean Twilio termination reason."""
     stream_ready = asyncio.get_running_loop().create_future()
 
     async def relay_twilio_to_openai():
-        session = media_protocol.MediaProtocolSession(twilio_account_sid)
+        try:
+            session = media_protocol.MediaProtocolSession(twilio_account_sid)
+        except Exception:
+            raise RealtimeBridgeInternalError(_BRIDGE_ERROR) from None
 
         while True:
             try:
                 message = await twilio_websocket.receive_text()
             except WebSocketDisconnect:
-                return
+                return "disconnected"
 
             result = None
             try:
-                result = session.process_message(message)
+                try:
+                    result = session.process_message(message)
+                except ValueError:
+                    raise RealtimeBridgeProtocolError(_BRIDGE_ERROR) from None
 
                 if isinstance(result, media_protocol.StartResult):
-                    scenario_id = patient_scenarios.get_scenario(
-                        result.scenario_id
-                    ).scenario_id
+                    try:
+                        scenario_id = patient_scenarios.get_scenario(
+                            result.scenario_id
+                        ).scenario_id
+                    except ValueError:
+                        raise RealtimeBridgeProtocolError(
+                            _BRIDGE_ERROR
+                        ) from None
                     event = openai_realtime_protocol.build_session_update(
                         scenario_id, _REALTIME_MODEL, _REALTIME_VOICE
                     )
@@ -55,7 +74,7 @@ async def bridge_realtime_audio(
                     finally:
                         del event
                 elif result is None:
-                    return
+                    return "stopped"
             finally:
                 del result
                 del message
@@ -97,27 +116,48 @@ async def bridge_realtime_audio(
                 del event
                 del message
 
-    tasks = (
-        asyncio.create_task(relay_twilio_to_openai()),
-        asyncio.create_task(relay_openai_to_twilio()),
-    )
-    failed = False
+        raise RealtimeBridgeInternalError(_BRIDGE_ERROR)
+
+    twilio_task = asyncio.create_task(relay_twilio_to_openai())
+    openai_task = asyncio.create_task(relay_openai_to_twilio())
+    tasks = (twilio_task, openai_task)
     try:
         done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-        for task in done:
-            task.result()
     except asyncio.CancelledError:
-        raise
-    except Exception:
-        failed = True
-    finally:
         for task in tasks:
             if not task.done():
                 task.cancel()
-        outcomes = await asyncio.gather(*tasks, return_exceptions=True)
-        if any(isinstance(outcome, Exception) for outcome in outcomes):
-            failed = True
-        del outcomes
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
 
-    if failed:
-        raise ValueError(_BRIDGE_ERROR) from None
+    openai_finished = openai_task in done
+    for task in tasks:
+        if not task.done():
+            task.cancel()
+    outcomes = await asyncio.gather(*tasks, return_exceptions=True)
+    twilio_outcome = outcomes[0]
+
+    protocol_failed = isinstance(
+        twilio_outcome, RealtimeBridgeProtocolError
+    )
+    internal_failed = openai_finished or any(
+        isinstance(outcome, BaseException)
+        and not isinstance(
+            outcome, (asyncio.CancelledError, RealtimeBridgeProtocolError)
+        )
+        for outcome in outcomes
+    )
+    clean_outcome = (
+        twilio_outcome
+        if twilio_outcome in ("stopped", "disconnected")
+        else None
+    )
+    del twilio_outcome
+    del outcomes
+    del done
+
+    if protocol_failed:
+        raise RealtimeBridgeProtocolError(_BRIDGE_ERROR) from None
+    if internal_failed or clean_outcome is None:
+        raise RealtimeBridgeInternalError(_BRIDGE_ERROR) from None
+    return clean_outcome
