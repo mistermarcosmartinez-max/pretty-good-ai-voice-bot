@@ -174,10 +174,20 @@ dictionaries, and OpenAI speech-started events into Twilio clear dictionaries
 for future interruption handling. It reuses the protocol modules' public
 parsers and builders and retains no payloads or event data.
 
-The protocol and relay helpers construct and check plain dictionaries and JSON
-only. They do not initiate provider connections or outbound WebSockets, and no
-live audio relay loop exists.
+`openai_realtime_connection.py` is an explicitly invoked, offline-tested
+connection boundary. Given an API key, it lazily loads the current asyncio
+WebSocket connector and opens the fixed OpenAI Realtime URL with an
+`Authorization: Bearer` header. It only returns the resulting connection; it
+does not send or receive WebSocket messages. Tests inject fictional connectors,
+so this boundary has not contacted OpenAI and provider authentication remains
+unverified. The `/media` route remains Twilio-only and does not import or invoke
+this connection boundary.
+
+The protocol and relay helpers still only construct and check plain
+dictionaries and JSON. No live audio relay loop exists, and the connection
+boundary has not been integrated with them or with an application route.
 
 Offline tests use fictional values, generated signatures, mocks, and
 a local ASGI harness. They make no network requests. No live call has been made,
-and OpenAI provider authentication and end-to-end calling remain unimplemented.
+and OpenAI provider authentication has not been attempted. End-to-end calling
+remains unimplemented.

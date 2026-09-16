@@ -2,3 +2,4 @@ fastapi==0.141.1
 uvicorn==0.52.4
 python-dotenv==1.2.3
 twilio==9.11.1
+websockets==17.0.1
