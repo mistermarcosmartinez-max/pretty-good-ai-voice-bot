@@ -1,0 +1,15 @@
+{
+  "artifact_files": [
+    "recording.mp3",
+    "transcript.md",
+    "metadata.json"
+  ],
+  "call_duration_seconds": 140,
+  "call_sid": "CA5c5e01ec13d8244136947788855dcbe5",
+  "recording_channels": 2,
+  "recording_duration_seconds": 135,
+  "recording_sid": "REa0ad0bc0da007de9d40624b3c8166d4a",
+  "recording_status": "completed",
+  "scenario_id": "request_routine_medication_refill",
+  "status": "completed"
+}

@@ -1,0 +1,15 @@
+{
+  "artifact_files": [
+    "recording.mp3",
+    "transcript.md",
+    "metadata.json"
+  ],
+  "call_duration_seconds": 120,
+  "call_sid": "CA11da9e9198d28de99ea8acd40d751b67",
+  "recording_channels": 2,
+  "recording_duration_seconds": 115,
+  "recording_sid": "RE29dfb9406fb1ba0965d12594d2faaba5",
+  "recording_status": "completed",
+  "scenario_id": "schedule_new_patient_primary_care",
+  "status": "completed"
+}

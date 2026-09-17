@@ -1,0 +1,15 @@
+{
+  "artifact_files": [
+    "recording.mp3",
+    "transcript.md",
+    "metadata.json"
+  ],
+  "call_duration_seconds": 156,
+  "call_sid": "CA5ccc27450be532f5b4a568088b7fd2b6",
+  "recording_channels": 2,
+  "recording_duration_seconds": 151,
+  "recording_sid": "RE2df90d86daa6d0b6ca503ade3122b121",
+  "recording_status": "completed",
+  "scenario_id": "clarify_unclear_appointment_request",
+  "status": "completed"
+}
