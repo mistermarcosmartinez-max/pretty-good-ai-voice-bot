@@ -1,9 +1,23 @@
 # pretty-good-ai-voice-bot
 AI Engineering Challenge - automated patient voice bot for testing a healthcare AI agent
 
-This first step provides a local FastAPI server with a health endpoint.
-Voice calling is not implemented yet. The server needs no API keys and makes
-no external API calls.
+## Completed evaluation
+
+The evaluation collected **15 complete artifact sets**, each containing an MP3
+recording, transcript, and metadata. **10 calls are selected as strong reviewer
+calls**, while **5 earlier or problematic calls are retained as transparent
+iteration evidence**. The final complete offline suite ran **226 tests with no
+failures or errors**.
+
+- [Call inventory](CALL_INVENTORY.md)
+- [Evaluation findings and bot iteration evidence](BUG_REPORT.md)
+- [Architecture and tradeoffs](ARCHITECTURE.md)
+- [All call artifacts](artifacts/calls/)
+
+The sections below retain the repository's setup, run, safety, and incremental
+implementation details. The documents above summarize the final evaluated
+system and supersede earlier progress-status statements about features still
+being planned.
 
 ## Run locally with Windows PowerShell
 
@@ -107,11 +121,13 @@ The unchanged local health endpoint does not load settings or require credential
 - Clarify an initially unclear appointment request
 - Recover after an interruption or misunderstanding
 
-The prompt builder tells a future voice model to speak naturally, reveal only
-known facts as they become relevant, adapt to the healthcare agent, follow each
-scenario's conversation guidance, and avoid inventing missing personal or
-medical details. It also prevents claims about a real emergency or a real
-appointment.
+The prompt builder tells the patient to answer the current question directly in
+one or two sentences, ask at most one necessary follow-up, avoid repeating
+confirmed details, and end naturally once the outcome and next step are clear.
+It preserves silence during disclosures and introductory announcements, reveals
+only known facts as relevant, and avoids inventing missing personal or medical
+details. The routine-visit scenario does not volunteer preparation topics unless
+the healthcare agent asks about them.
 
 The standard offline test command above checks the stored scenario, lookup
 errors, and prompt instructions without loading configuration or contacting a
@@ -156,18 +172,23 @@ wiring has not opened either provider connection or relayed real audio.
 has not been verified with Twilio, and end-to-end calling remains unimplemented.
 
 `media_protocol.py` is a pure offline parser and message builder for the Twilio
-Media Streams protocol. It validates the connected, start, inbound media, and
-stop messages and builds media, mark, and clear messages without opening a
-WebSocket or processing audio. Twilio's μ-law/8000 audio format matches OpenAI's
+Media Streams protocol. It validates connected, start, inbound media, playback
+mark, and stop messages and builds media, mark, and clear messages without
+opening a WebSocket or processing audio. Twilio's μ-law/8000 audio format matches OpenAI's
 `audio/pcmu`/8000 format, but no OpenAI connection or live audio relay exists yet.
 No audio has been received, generated, stored, or played.
 
 `openai_realtime_protocol.py` is a pure offline builder and parser for the next
 OpenAI Realtime protocol boundary. It builds an audio-only `session.update`
-from an existing patient scenario, using PCMU at its 8000 Hz rate and semantic
-VAD, and builds validated `input_audio_buffer.append` events. It also validates
-`response.output_audio.delta` and `input_audio_buffer.speech_started` events
-without decoding, transforming, storing, printing, or logging audio.
+from an existing patient scenario, using PCMU at its 8000 Hz rate and GA server
+VAD with a 0.5 threshold, 300 ms prefix padding, and 900 ms silence duration.
+The VAD automatically creates responses but does not interrupt them. The module
+also enables English input transcription for transient transfer detection,
+builds validated `input_audio_buffer.append` and targeted `response.cancel`
+events, and validates
+`response.output_audio.delta`, `response.output_audio.done`, and
+`input_audio_buffer.speech_started` events without storing, printing, or logging
+audio.
 
 `audio_relay.py` is a pure offline adapter between the Twilio and OpenAI
 protocol helpers. It converts validated inbound Twilio media into OpenAI audio
@@ -190,8 +211,30 @@ The protocol and relay helpers still only construct and check plain
 dictionaries and JSON. `realtime_bridge.py` adds an offline-tested,
 bidirectional relay for two already-open, caller-owned WebSockets. It uses the
 existing protocol session, scenario lookup, session-event builder, and audio
-adapters to coordinate both directions, including interruption clearing, and
-cleans up its internal tasks when either direction ends. The bridge does not
+adapters to coordinate both directions. With interruption disabled it validates
+speech-start events without clearing Twilio's buffered patient audio, and it
+uses playback marks to distinguish generated audio from audio Twilio has played.
+It ignores repeated provider events using a bounded, per-call event-ID window.
+When an input transcript confirms that a transfer is actively starting (rather
+than merely asking or discussing whether to transfer), the bridge cancels the
+active patient response, clears queued patient audio, suppresses subsequent
+transferred-line input, and therefore remains silent during the new greeting.
+It checks streaming input-transcription deltas for unambiguously active wording
+such as "Transferring you now" so it does not have to wait for the completed
+transcript event. Fragmented, repeated, overlapping, and cumulative transcript
+deltas are merged into one bounded per-turn buffer. The completed transcript
+confirms the transition; if it corrects a provisional streaming match, later
+responses in that call are allowed again. Transfer offers remain ordinary
+questions that the patient can answer. Patient-output transcripts are validated
+but never used to cancel or truncate that response, because transcript
+punctuation can arrive before a grammatically complete audible sentence. The
+prompt instead requires one short, complete transfer request or acceptance.
+Ordinary remote speech-start events still do not clear patient audio. Remote
+input transcript text is used transiently for transfer routing, has a strict
+per-turn size limit, and is not logged or retained. Audio that Twilio has
+already played cannot be retracted; clearing applies to audio that remains
+buffered when confirmation is detected.
+It cleans up its internal tasks when either direction ends. The bridge does not
 create, authenticate, accept, or close either connection.
 
 The `/media` route now invokes the bridge in code after the fake-tested
@@ -203,3 +246,74 @@ Offline tests use fictional values, generated signatures, mocks, and
 a local ASGI harness. They make no network requests. No live call has been made,
 and OpenAI provider authentication has not been attempted. End-to-end calling
 remains unimplemented.
+
+## Call artifact collector
+
+`collect_call_artifacts.py` prepares challenge artifacts for one explicitly
+selected completed call. It validates that the fetched call used the protected
+assessment destination, selects a completed two-channel recording belonging to
+the exact Call SID, and downloads both the preserved MP3 and a temporary
+dual-channel WAV. It splits the WAV into inbound and outbound mono audio and
+transcribes each channel separately with OpenAI's
+`gpt-4o-transcribe-diarize` model. It writes the results beneath
+`artifacts/calls/<CALL_SID>/` as `recording.mp3`, `transcript.md`, and
+`metadata.json`. Transcript roles come from the recording channels, not model
+diarization: inbound audio is labeled `Remote side`, and outbound audio is
+labeled `Patient bot`. Disclosures, the healthcare agent, and transferred-line
+recordings can all share the remote channel, so the collector intentionally
+does not claim to distinguish those voices from one another.
+
+For these outbound calls, `recording_channels="dual"` and
+`recording_track="both"` use Twilio's track order: channel 1 is inbound audio
+received from the remote side, while channel 2 is outbound patient-bot audio
+generated through Twilio. The splitter preserves every audio frame, including
+leading and internal silence, so each channel retains the original recording
+timeline before timestamped segments are merged.
+
+Install the pinned dependencies with the project virtual environment before a
+separately authorized collection run:
+
+```powershell
+& .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
+Then invoke the collector with an exact Call SID and existing fictional
+scenario ID:
+
+```powershell
+& .\.venv\Scripts\python.exe .\collect_call_artifacts.py `
+  --call-sid CA00000000000000000000000000000000 `
+  --scenario-id schedule_routine_visit
+```
+
+Use `--output-root <folder>` to choose a different root. Existing call folders
+are always rejected; the collector has no overwrite option. Running this
+command loads `.env`, contacts both Twilio and OpenAI, downloads the selected
+recording, and makes two sequential transcription requests. Compared with one
+mixed-audio request, this can roughly double transcription cost and adds the
+latency of both requests, but it makes call-leg attribution deterministic. If
+either request fails, the collector does not retry or publish partial
+artifacts; an already completed first request may still be billable. The
+temporary dual-channel and split-channel WAV data remains in memory and is
+discarded on success or failure. The command must only be run with explicit
+authorization. Unit tests inject fictional provider boundaries and do not make
+network requests.
+
+Failures print only a stable processing category, for example
+`CALL_ARTIFACT_ERROR stage=openai_transcription`. Provider details, response
+bodies, signed URLs, credentials, and local secret values are never included.
+Transcription parsing also prints a non-sensitive reason code, such as
+`CALL_ARTIFACT_ERROR stage=transcription_parse reason=timestamps_missing`.
+An explicitly empty transcribed channel is allowed when the other channel has
+timestamped speech. Text without timestamped segments, malformed segments, and
+two empty channels fail instead of producing an inaccurate or empty transcript.
+Valid timestamped segments are stably sorted by start time before the two
+channels are merged. Overlap is preserved, equal-start segments retain a
+deterministic order, and no timestamps or segment text are changed to force a
+non-overlapping timeline. Invalid numeric timestamps and reversed segment
+bounds have distinct safe reason codes; an ordering that cannot be normalized
+fails as `segment_order_invalid` rather than publishing a questionable result.
+The collector does not retry automatically and publishes the call folder only
+after every artifact has been validated and written successfully. Missing or
+mono channel metadata, malformed WAV data, and digitally silent channels fail
+as `CALL_ARTIFACT_ERROR stage=channel_audio_validation`.
