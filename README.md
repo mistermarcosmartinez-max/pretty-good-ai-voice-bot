@@ -4,15 +4,17 @@ AI Engineering Challenge - automated patient voice bot for testing a healthcare 
 ## Completed evaluation
 
 The evaluation collected **15 complete artifact sets**, each containing an MP3
-recording, transcript, and metadata. **10 calls are selected as strong reviewer
-calls**, while **5 earlier or problematic calls are retained as transparent
-iteration evidence**. The final complete offline suite ran **226 tests with no
-failures or errors**.
+recording, transcript, and metadata. `artifacts/calls` contains the **10
+submitted evaluation calls**. `artifacts/iteration_evidence` contains **5
+development calls retained only to show iteration**; these five development
+calls are **not counted toward the required final call set**. The final complete
+offline suite ran **226 tests with no failures or errors**.
 
 - [Call inventory](CALL_INVENTORY.md)
 - [Evaluation findings and bot iteration evidence](BUG_REPORT.md)
 - [Architecture and tradeoffs](ARCHITECTURE.md)
-- [All call artifacts](artifacts/calls/)
+- [Submitted evaluation calls — 10](artifacts/calls/)
+- [Development iteration evidence — 5](artifacts/iteration_evidence/)
 
 ## Loom Videos
 
