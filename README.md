@@ -14,6 +14,13 @@ failures or errors**.
 - [Architecture and tradeoffs](ARCHITECTURE.md)
 - [All call artifacts](artifacts/calls/)
 
+## Loom Videos
+
+Both recordings use the creator's webcam and voice.
+
+- [Project walkthrough](https://www.loom.com/share/9c6c1f7c08cc4d54b1b3bea7d2e063a0)
+- [AI debugging — Transfer Overlap Follow-up](https://www.loom.com/share/c85d30dcba5541c2ab5d357c561fc4f3)
+
 The sections below retain the repository's setup, run, safety, and incremental
 implementation details. The documents above summarize the final evaluated
 system and supersede earlier progress-status statements about features still
