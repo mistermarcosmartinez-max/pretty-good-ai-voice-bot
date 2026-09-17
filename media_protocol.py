@@ -24,6 +24,11 @@ class StartResult:
     scenario_id: str
 
 
+@dataclass(frozen=True)
+class MarkResult:
+    name: str
+
+
 def _parse_object(message, error_message):
     try:
         parsed = json.loads(message)
@@ -142,6 +147,23 @@ def parse_stop_message(message, expected_stream_sid):
     return None
 
 
+def parse_mark_message(message, expected_stream_sid):
+    """Validate a Twilio playback mark and return only its local label."""
+    error = "Invalid mark message."
+    parsed = _parse_object(message, error)
+    mark = parsed.get("mark")
+    if (
+        parsed.get("event") != "mark"
+        or not _is_nonempty_string(expected_stream_sid)
+        or parsed.get("streamSid") != expected_stream_sid
+        or not isinstance(mark, dict)
+        or not isinstance(mark.get("name"), str)
+        or _SAFE_MARK_NAME_PATTERN.fullmatch(mark["name"]) is None
+    ):
+        raise ValueError(error)
+    return MarkResult(name=mark["name"])
+
+
 def build_media_message(stream_sid, payload):
     """Build a Twilio media message after syntax-only payload validation."""
     if not _is_nonempty_string(stream_sid) or not _is_strict_base64(payload):
@@ -233,6 +255,8 @@ class MediaProtocolSession:
             if self._state == "streaming":
                 if event == "media":
                     return parse_inbound_media_message(message, self._stream_sid)
+                if event == "mark":
+                    return parse_mark_message(message, self._stream_sid)
                 if event == "stop":
                     parse_stop_message(message, self._stream_sid)
                     self._state = "stopped"

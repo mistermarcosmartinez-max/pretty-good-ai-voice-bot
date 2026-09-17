@@ -11,6 +11,14 @@ from patient_scenarios import get_scenario
 _E164_PATTERN = re.compile(r"^\+[1-9]\d{1,14}$")
 _FIXED_ASSESSMENT_DESTINATION = call_safety.ASSESSMENT_DESTINATION
 
+# Twilio's dual-channel Calls recording layout is ordered by track: channel 1
+# is inbound audio received by Twilio and channel 2 is outbound audio generated
+# by Twilio. Because this project originates the call and generates the patient
+# audio, those tracks are the remote side and patient bot, respectively.
+RECORDING_CHANNELS = "dual"
+RECORDING_TRACK = "both"
+RECORDING_CHANNEL_ROLES = ("Remote side", "Patient bot")
+
 
 def build_twilio_client(settings, client_factory=Client):
     """Build a Twilio client locally from validated credentials."""
@@ -73,8 +81,8 @@ def create_assessment_call(client, settings, scenario_id):
         status_callback_method="POST",
         status_callback_event=["initiated", "ringing", "answered", "completed"],
         record=True,
-        recording_channels="dual",
-        recording_track="both",
+        recording_channels=RECORDING_CHANNELS,
+        recording_track=RECORDING_TRACK,
         recording_status_callback=recording_status_url,
         recording_status_callback_method="POST",
         recording_status_callback_event=["completed"],

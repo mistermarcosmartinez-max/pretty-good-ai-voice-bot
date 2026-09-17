@@ -134,21 +134,138 @@ class RealtimeBridgeTests(unittest.TestCase):
     def stop(self):
         return json.dumps({"event": "stop", "streamSid": self.stream_sid})
 
-    def delta(self, payload=None):
+    def delta(
+        self,
+        payload=None,
+        event_id="event-fictional-output",
+        response_id="response-fictional",
+    ):
         return json.dumps(
             {
                 "type": "response.output_audio.delta",
+                "event_id": event_id,
+                "response_id": response_id,
+                "item_id": "item-fictional-output",
+                "output_index": 0,
+                "content_index": 0,
                 "delta": self.payload_one if payload is None else payload,
             }
         )
 
-    def speech_started(self):
+    def response_created(self, response_id="response-fictional"):
+        return json.dumps(
+            {
+                "type": "response.created",
+                "event_id": f"event-created-{response_id}",
+                "response": {"id": response_id, "status": "in_progress"},
+            }
+        )
+
+    def response_done(self, response_id="response-fictional"):
+        return json.dumps(
+            {
+                "type": "response.done",
+                "event_id": f"event-done-{response_id}",
+                "response": {"id": response_id, "status": "completed"},
+            }
+        )
+
+    def input_transcript(
+        self,
+        transcript,
+        event_id="event-transcript",
+        item_id="item-fictional-input",
+    ):
+        return json.dumps(
+            {
+                "type": "conversation.item.input_audio_transcription.completed",
+                "event_id": event_id,
+                "item_id": item_id,
+                "content_index": 0,
+                "transcript": transcript,
+            }
+        )
+
+    def input_transcript_delta(
+        self,
+        delta,
+        event_id="event-input-transcript-delta",
+        item_id="item-fictional-input",
+    ):
+        return json.dumps(
+            {
+                "type": "conversation.item.input_audio_transcription.delta",
+                "event_id": event_id,
+                "item_id": item_id,
+                "content_index": 0,
+                "delta": delta,
+            }
+        )
+
+    def output_transcript_delta(
+        self,
+        transcript,
+        event_id="event-output-transcript-delta",
+        response_id="response-fictional",
+    ):
+        return json.dumps(
+            {
+                "type": "response.output_audio_transcript.delta",
+                "event_id": event_id,
+                "response_id": response_id,
+                "item_id": "item-fictional-output",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": transcript,
+            }
+        )
+
+    def output_transcript_done(
+        self,
+        transcript,
+        event_id="event-output-transcript-done",
+        response_id="response-fictional",
+    ):
+        return json.dumps(
+            {
+                "type": "response.output_audio_transcript.done",
+                "event_id": event_id,
+                "response_id": response_id,
+                "item_id": "item-fictional-output",
+                "output_index": 0,
+                "content_index": 0,
+                "transcript": transcript,
+            }
+        )
+
+    def speech_started(self, event_id="event-fictional"):
         return json.dumps(
             {
                 "type": "input_audio_buffer.speech_started",
-                "event_id": "event-fictional",
+                "event_id": event_id,
                 "audio_start_ms": 120,
                 "item_id": "item-fictional",
+            }
+        )
+
+    def audio_done(self):
+        return json.dumps(
+            {
+                "type": "response.output_audio.done",
+                "event_id": "event-fictional-audio-done",
+                "response_id": "response-fictional",
+                "item_id": "item-fictional-output",
+                "output_index": 0,
+                "content_index": 0,
+            }
+        )
+
+    def mark(self, name="response_1_played"):
+        return json.dumps(
+            {
+                "event": "mark",
+                "streamSid": self.stream_sid,
+                "mark": {"name": name},
             }
         )
 
@@ -218,22 +335,871 @@ class RealtimeBridgeTests(unittest.TestCase):
             ],
         )
 
-    def test_speech_started_sends_twilio_clear(self):
+    def test_duplicate_openai_audio_event_is_relayed_only_once(self):
+        duplicate = self.delta()
         twilio = FakeTwilioWebSocket((self.connected(), self.start()))
         openai = FakeOpenAIConnection(
-            (self.speech_started(),),
+            (duplicate, duplicate),
+            on_empty=lambda: twilio.add_message(self.stop()),
+        )
+
+        with self.assertLogs("realtime_bridge", level="INFO") as logs:
+            self.run_bridge(twilio, openai)
+
+        sent = [json.loads(message) for message in twilio.sent]
+        self.assertEqual([event["event"] for event in sent], ["media"])
+        self.assertIn("openai_duplicate_events_ignored=1", logs.output[0])
+
+    def test_transfer_cancels_and_clears_output_then_suppresses_new_line(self):
+        twilio = FakeTwilioWebSocket((self.connected(), self.start()))
+
+        def begin_transferred_line():
+            twilio.add_message(self.media(self.payload_two))
+            twilio.add_message(self.stop())
+
+        openai = FakeOpenAIConnection(
+            (
+                self.response_created(),
+                self.delta(),
+                self.input_transcript(
+                    "Please hold while I connect you with the other team."
+                ),
+                self.speech_started("event-transfer-speech-1"),
+                self.speech_started("event-transfer-speech-2"),
+            ),
+            on_empty=begin_transferred_line,
+        )
+
+        with self.assertLogs("realtime_bridge", level="INFO") as logs:
+            result = self.run_bridge(twilio, openai)
+
+        self.assertEqual(result, "stopped")
+        self.assertEqual(
+            [json.loads(message) for message in twilio.sent],
+            [
+                {
+                    "event": "media",
+                    "streamSid": self.stream_sid,
+                    "media": {"payload": self.payload_one},
+                },
+                {"event": "clear", "streamSid": self.stream_sid},
+            ],
+        )
+        openai_events = [json.loads(message) for message in openai.sent]
+        self.assertEqual(openai_events[0]["type"], "session.update")
+        self.assertEqual(
+            openai_events[1],
+            {"type": "response.cancel", "response_id": "response-fictional"},
+        )
+        self.assertNotIn("input_audio_buffer.append", {
+            event["type"] for event in openai_events[1:]
+        })
+        diagnostic = logs.output[0]
+        for expected in (
+            "transfer_transitions_detected=1",
+            "openai_responses_cancelled=1",
+            "twilio_clear_messages_sent=1",
+            "openai_input_audio_frames_suppressed=1",
+        ):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, diagnostic)
+
+    def test_streaming_confirmation_cancels_and_clears_active_queued_audio(self):
+        twilio = FakeTwilioWebSocket((self.connected(), self.start()))
+        openai = FakeOpenAIConnection(
+            (
+                self.response_created(),
+                self.delta(event_id="event-audio-before-request"),
+                self.output_transcript_delta("Please transfer me."),
+                self.delta(
+                    payload=self.payload_two,
+                    event_id="event-audio-after-request",
+                ),
+                self.input_transcript_delta(
+                    "Transferring ", event_id="event-transfer-prefix"
+                ),
+                self.input_transcript_delta(
+                    "you now.", event_id="event-transfer-confirmed"
+                ),
+                self.delta(
+                    payload=self.payload_two,
+                    event_id="event-audio-after-confirmation",
+                ),
+            ),
+            on_empty=lambda: twilio.add_message(self.stop()),
+        )
+
+        with self.assertLogs("realtime_bridge", level="INFO") as logs:
+            self.run_bridge(twilio, openai)
+
+        self.assertEqual(
+            [json.loads(message) for message in twilio.sent],
+            [
+                {
+                    "event": "media",
+                    "streamSid": self.stream_sid,
+                    "media": {"payload": self.payload_one},
+                },
+                {
+                    "event": "media",
+                    "streamSid": self.stream_sid,
+                    "media": {"payload": self.payload_two},
+                },
+                {"event": "clear", "streamSid": self.stream_sid},
+            ],
+        )
+        openai_events = [json.loads(message) for message in openai.sent]
+        self.assertEqual(
+            [event for event in openai_events if event["type"] == "response.cancel"],
+            [{"type": "response.cancel", "response_id": "response-fictional"}],
+        )
+        diagnostic = logs.output[0]
+        self.assertIn("transfer_transitions_detected=1", diagnostic)
+        self.assertIn("openai_output_audio_frames_suppressed=1", diagnostic)
+        self.assertIn("twilio_clear_messages_sent=1", diagnostic)
+
+    def test_call_four_order_clears_audio_when_confirmation_interrupts_output(self):
+        twilio = FakeTwilioWebSocket((self.connected(), self.start()))
+        openai = FakeOpenAIConnection(
+            (
+                self.response_created(),
+                self.delta(event_id="event-request-audio"),
+                self.delta(
+                    payload=self.payload_two,
+                    event_id="event-follow-up-audio-1",
+                ),
+                self.input_transcript_delta(
+                    "Transferring ", event_id="event-confirmation-fragment-1"
+                ),
+                self.delta(
+                    payload=self.payload_two,
+                    event_id="event-follow-up-audio-2",
+                ),
+                self.input_transcript_delta(
+                    "you now.", event_id="event-confirmation-fragment-2"
+                ),
+                self.delta(
+                    payload=self.payload_two,
+                    event_id="event-audio-after-confirmation",
+                ),
+                self.input_transcript(
+                    "Transferring you now. Thank you.",
+                    event_id="event-confirmation-completed",
+                ),
+            ),
+            on_empty=lambda: twilio.add_message(self.stop()),
+        )
+
+        with self.assertLogs("realtime_bridge", level="INFO") as logs:
+            self.run_bridge(twilio, openai)
+
+        self.assertEqual(
+            [json.loads(message)["event"] for message in twilio.sent],
+            ["media", "media", "media", "clear"],
+        )
+        sent = [json.loads(message) for message in openai.sent]
+        self.assertEqual(
+            [event for event in sent if event["type"] == "response.cancel"],
+            [{"type": "response.cancel", "response_id": "response-fictional"}],
+        )
+        self.assertIn("transfer_transitions_detected=1", logs.output[0])
+        self.assertIn("twilio_clear_messages_sent=1", logs.output[0])
+        self.assertIn("openai_output_audio_frames_suppressed=1", logs.output[0])
+
+    def test_repeated_and_cumulative_input_deltas_merge_and_cancel_once(self):
+        twilio = FakeTwilioWebSocket((self.connected(), self.start()))
+        openai = FakeOpenAIConnection(
+            (
+                self.response_created(),
+                self.delta(event_id="event-queued-audio"),
+                self.input_transcript_delta("Trans", event_id="event-fragment-1"),
+                self.input_transcript_delta("Trans", event_id="event-fragment-2"),
+                self.input_transcript_delta(
+                    "Transferring ", event_id="event-cumulative-1"
+                ),
+                self.input_transcript_delta(
+                    "Transferring you now.", event_id="event-cumulative-2"
+                ),
+                self.input_transcript_delta(
+                    "Transferring you now.", event_id="event-cumulative-repeat"
+                ),
+                self.input_transcript(
+                    "Transferring you now.",
+                    event_id="event-cumulative-completed",
+                ),
+            ),
+            on_empty=lambda: twilio.add_message(self.stop()),
+        )
+
+        with self.assertLogs("realtime_bridge", level="INFO") as logs:
+            self.run_bridge(twilio, openai)
+
+        self.assertEqual(
+            [json.loads(message)["event"] for message in twilio.sent],
+            ["media", "clear"],
+        )
+        sent = [json.loads(message) for message in openai.sent]
+        self.assertEqual(
+            len([event for event in sent if event["type"] == "response.cancel"]),
+            1,
+        )
+        self.assertIn("twilio_clear_messages_sent=1", logs.output[0])
+
+    def test_confirmed_transfer_clears_audio_waiting_behind_playback_mark(self):
+        twilio = FakeTwilioWebSocket((self.connected(), self.start()))
+        openai = FakeOpenAIConnection(
+            (
+                self.response_created(),
+                self.delta(),
+                self.audio_done(),
+                self.input_transcript_delta("Transferring you now."),
+            ),
+            on_empty=lambda: twilio.add_message(self.stop()),
+        )
+
+        with self.assertLogs("realtime_bridge", level="INFO") as logs:
+            self.run_bridge(twilio, openai)
+
+        self.assertEqual(
+            [json.loads(message)["event"] for message in twilio.sent],
+            ["media", "mark", "clear"],
+        )
+        diagnostic = logs.output[0]
+        self.assertIn("openai_responses_cancelled=1", diagnostic)
+        self.assertIn("twilio_playback_marks_sent=1", diagnostic)
+        self.assertIn("twilio_clear_messages_sent=1", diagnostic)
+
+    def test_transfer_offer_and_complete_acceptance_finish_without_cancellation(self):
+        twilio = FakeTwilioWebSocket((self.connected(), self.start()))
+        openai = FakeOpenAIConnection(
+            (
+                self.input_transcript("Would you like me to transfer you?"),
+                self.response_created(),
+                self.delta(event_id="event-acceptance-audio"),
+                self.output_transcript_delta("Yes, please."),
+                self.delta(
+                    payload=self.payload_two,
+                    event_id="event-unnecessary-follow-up",
+                ),
+                self.speech_started("event-ordinary-speech-after-acceptance"),
+            ),
+            on_empty=lambda: twilio.add_message(self.stop()),
+        )
+
+        with self.assertLogs("realtime_bridge", level="INFO") as logs:
+            self.run_bridge(twilio, openai)
+
+        self.assertEqual(
+            [json.loads(message)["event"] for message in twilio.sent],
+            ["media", "media"],
+        )
+        sent_to_openai = [json.loads(message) for message in openai.sent]
+        self.assertFalse(
+            any(event["type"] == "response.cancel" for event in sent_to_openai)
+        )
+        diagnostic = logs.output[0]
+        self.assertIn("transfer_transitions_detected=0", diagnostic)
+        self.assertIn("twilio_clear_messages_sent=0", diagnostic)
+        self.assertIn("openai_output_audio_frames_suppressed=0", diagnostic)
+
+    def test_completed_acceptance_without_punctuation_finishes_normally(self):
+        twilio = FakeTwilioWebSocket((self.connected(), self.start()))
+        openai = FakeOpenAIConnection(
+            (
+                self.input_transcript("Would you like to be transferred?"),
+                self.response_created(),
+                self.delta(event_id="event-short-acceptance"),
+                self.output_transcript_done("Yes please"),
+                self.delta(
+                    payload=self.payload_two,
+                    event_id="event-follow-up-after-completed-acceptance",
+                ),
+            ),
             on_empty=lambda: twilio.add_message(self.stop()),
         )
 
         self.run_bridge(twilio, openai)
 
         self.assertEqual(
-            [json.loads(message) for message in twilio.sent],
-            [{"event": "clear", "streamSid": self.stream_sid}],
+            [json.loads(message)["event"] for message in twilio.sent],
+            ["media", "media"],
+        )
+        self.assertFalse(
+            any(
+                json.loads(message)["type"] == "response.cancel"
+                for message in openai.sent
+            )
         )
 
+    def test_repeated_and_cumulative_patient_transcript_never_truncates_audio(self):
+        twilio = FakeTwilioWebSocket((self.connected(), self.start()))
+        openai = FakeOpenAIConnection(
+            (
+                self.input_transcript("Would you like me to transfer you?"),
+                self.response_created(),
+                self.delta(event_id="event-acceptance-audio"),
+                self.output_transcript_delta(
+                    "Yes", event_id="event-output-fragment-1"
+                ),
+                self.output_transcript_delta(
+                    "Yes", event_id="event-output-fragment-repeat"
+                ),
+                self.output_transcript_delta(
+                    "Yes, ", event_id="event-output-cumulative-1"
+                ),
+                self.output_transcript_delta(
+                    "Yes, please.", event_id="event-output-cumulative-2"
+                ),
+                self.output_transcript_delta(
+                    "Yes, please.", event_id="event-output-cumulative-repeat"
+                ),
+                self.delta(
+                    payload=self.payload_two,
+                    event_id="event-output-after-acceptance",
+                ),
+            ),
+            on_empty=lambda: twilio.add_message(self.stop()),
+        )
+
+        self.run_bridge(twilio, openai)
+
+        sent = [json.loads(message) for message in openai.sent]
+        self.assertFalse(
+            any(event["type"] == "response.cancel" for event in sent)
+        )
+        self.assertEqual(
+            [json.loads(message)["event"] for message in twilio.sent],
+            ["media", "media"],
+        )
+
+    def test_punctuated_incomplete_transfer_clauses_never_cancel_output(self):
+        incomplete_clauses = (
+            "Please connect me to.",
+            "Please transfer me to.",
+            "Please put me through to.",
+            "I'd like to speak with.",
+        )
+        for index, clause in enumerate(incomplete_clauses):
+            with self.subTest(clause=clause):
+                twilio = FakeTwilioWebSocket((self.connected(), self.start()))
+                openai = FakeOpenAIConnection(
+                    (
+                        self.input_transcript(
+                            "Would you like me to transfer you?",
+                            event_id=f"event-offer-{index}",
+                        ),
+                        self.response_created(),
+                        self.delta(event_id=f"event-before-clause-{index}"),
+                        self.output_transcript_delta(
+                            clause, event_id=f"event-clause-{index}"
+                        ),
+                        self.delta(
+                            payload=self.payload_two,
+                            event_id=f"event-after-clause-{index}",
+                        ),
+                    ),
+                    on_empty=lambda: twilio.add_message(self.stop()),
+                )
+
+                self.run_bridge(twilio, openai)
+
+                self.assertEqual(
+                    [json.loads(message)["event"] for message in twilio.sent],
+                    ["media", "media"],
+                )
+                self.assertFalse(
+                    any(
+                        json.loads(message)["type"] == "response.cancel"
+                        for message in openai.sent
+                    )
+                )
+
+    def test_multi_sentence_transfer_response_is_not_runtime_truncated(self):
+        twilio = FakeTwilioWebSocket((self.connected(), self.start()))
+        openai = FakeOpenAIConnection(
+            (
+                self.input_transcript("Would you like me to transfer you?"),
+                self.response_created(),
+                self.delta(event_id="event-multi-sentence-audio-1"),
+                self.output_transcript_delta(
+                    "Yes, please transfer me. I will wait for the next team."
+                ),
+                self.delta(
+                    payload=self.payload_two,
+                    event_id="event-multi-sentence-audio-2",
+                ),
+                self.output_transcript_done(
+                    "Yes, please transfer me. I will wait for the next team."
+                ),
+            ),
+            on_empty=lambda: twilio.add_message(self.stop()),
+        )
+
+        self.run_bridge(twilio, openai)
+
+        self.assertEqual(
+            [json.loads(message)["event"] for message in twilio.sent],
+            ["media", "media"],
+        )
+        self.assertFalse(
+            any(
+                json.loads(message)["type"] == "response.cancel"
+                for message in openai.sent
+            )
+        )
+
+    def test_call_eight_order_finishes_acceptance_until_remote_confirmation(self):
+        twilio = FakeTwilioWebSocket((self.connected(), self.start()))
+        openai = FakeOpenAIConnection(
+            (
+                self.input_transcript(
+                    "Would you like me to connect you with that team?",
+                    event_id="event-call-eight-offer",
+                ),
+                self.response_created(),
+                self.delta(event_id="event-call-eight-audio-1"),
+                self.output_transcript_delta(
+                    "Please connect me to.",
+                    event_id="event-call-eight-incomplete-punctuation",
+                ),
+                self.delta(
+                    payload=self.payload_two,
+                    event_id="event-call-eight-audio-2",
+                ),
+                self.output_transcript_done(
+                    "Please connect me to the new-patient team.",
+                    event_id="event-call-eight-complete-sentence",
+                ),
+                self.delta(event_id="event-call-eight-audio-3"),
+                self.input_transcript_delta(
+                    "Transferring ", event_id="event-call-eight-confirmation-1"
+                ),
+                self.input_transcript_delta(
+                    "you now.", event_id="event-call-eight-confirmation-2"
+                ),
+                self.delta(
+                    payload=self.payload_two,
+                    event_id="event-call-eight-audio-after-confirmation",
+                ),
+            ),
+            on_empty=lambda: twilio.add_message(self.stop()),
+        )
+
+        with self.assertLogs("realtime_bridge", level="INFO") as logs:
+            self.run_bridge(twilio, openai)
+
+        self.assertEqual(
+            [json.loads(message)["event"] for message in twilio.sent],
+            ["media", "media", "media", "clear"],
+        )
+        sent = [json.loads(message) for message in openai.sent]
+        self.assertEqual(
+            [event for event in sent if event["type"] == "response.cancel"],
+            [{"type": "response.cancel", "response_id": "response-fictional"}],
+        )
+        self.assertIn("openai_output_audio_frames_suppressed=1", logs.output[0])
+        self.assertIn("twilio_clear_messages_sent=1", logs.output[0])
+
+    def test_transfer_detection_is_general_without_treating_normal_wait_as_transfer(self):
+        transfer_announcements = (
+            "I am transferring the call now.",
+            "Let me put you through to that department.",
+            "Please hold while I get the other line.",
+            "I will connect you with another team.",
+            "I\u2019M TRANSFERRING YOU NOW!",
+            "Not a problem. I\u2019m transferring you now.",
+            "I’M TRANSFERRING YOU NOW!",
+            "One moment — I'll put you through to billing.",
+            "Your call is being transferred now.",
+            "I'm going to transfer your call now.",
+            "You'll be connected to the new line now.",
+            "Transferring you now. Thank you.",
+        )
+        for announcement in transfer_announcements:
+            with self.subTest(announcement=announcement):
+                self.assertTrue(
+                    realtime_bridge._is_transfer_announcement(announcement)
+                )
+        self.assertTrue(
+            realtime_bridge._is_streaming_transfer_announcement(
+                "Transferring you now."
+            )
+        )
+        self.assertFalse(
+            realtime_bridge._is_streaming_transfer_announcement(
+                "I will transfer you"
+            )
+        )
+        non_actions = (
+            "Would you like me to transfer you?",
+            "Would you like me to transfer you",
+            "Do you want me to connect you with billing?",
+            "Can I transfer the call?",
+            "Should I transfer you now?",
+            "We can transfer you if you'd like.",
+            "I will transfer you if you want.",
+            "I will transfer you after I finish this update.",
+            "I will transfer you later.",
+            "I will transfer you tomorrow.",
+            "I will transfer you in 10 minutes.",
+            "We'll connect you once you confirm the department.",
+            "If I transfer you, the other team can help.",
+            "I'm not transferring you now.",
+            "I don't think I'm transferring you now.",
+            "I won't be transferring you now.",
+            "Please hold while I transfer your prescription.",
+            "Please hold while I transfer the pharmacy request.",
+            "Please hold while I transfer your medical records.",
+            "Please hold while I transfer the data.",
+            "I'm transferring your prescription to the pharmacy.",
+            "I'm transferring your records to the new clinic.",
+            "I'm transferring the data now.",
+            "I'm transferring your call data now.",
+            "I'm routing the call records now.",
+            "The transfer team can answer that question.",
+            "Take your time while I pull up the appointment.",
+        )
+        for statement in non_actions:
+            with self.subTest(statement=statement):
+                self.assertFalse(
+                    realtime_bridge._is_transfer_announcement(statement)
+                )
+
+    def test_offers_refusals_and_transfer_discussion_are_nonterminal(self):
+        nonterminal_statements = (
+            "Would you like me to transfer you?",
+            "Would you like me to transfer you",
+            "Would you like to be transferred?",
+            "Can I connect you with support?",
+            "Would it help if I transferred you?",
+            "No, thank you. I don't want to be transferred.",
+            "I do not want you to transfer me.",
+            "I would not like you to transfer me.",
+            "If you transfer me, will I need to repeat that?",
+            "The transfer team might be able to help.",
+            "My prescription was transferred last month.",
+            "Could you transfer my prescription to another pharmacy?",
+            "I need to transfer my medical records.",
+        )
+        for statement in nonterminal_statements:
+            with self.subTest(statement=statement):
+                self.assertFalse(
+                    realtime_bridge._is_transfer_announcement(statement)
+                )
+
+    def test_only_healthcare_input_transcript_can_activate_transfer(self):
+        patient_output_transcript = json.dumps(
+            {
+                "type": "response.output_audio_transcript.done",
+                "event_id": "event-patient-output-transcript",
+                "response_id": "response-fictional",
+                "item_id": "item-fictional-output",
+                "output_index": 0,
+                "content_index": 0,
+                "transcript": "I am transferring you now.",
+            }
+        )
+        twilio = FakeTwilioWebSocket((self.connected(), self.start()))
+        openai = FakeOpenAIConnection(
+            (patient_output_transcript, self.delta()),
+            on_empty=lambda: twilio.add_message(self.stop()),
+        )
+
+        with self.assertLogs("realtime_bridge", level="INFO") as logs:
+            self.run_bridge(twilio, openai)
+
+        self.assertEqual(
+            [json.loads(message)["event"] for message in twilio.sent],
+            ["media"],
+        )
+        self.assertIn("transfer_transitions_detected=0", logs.output[0])
+
+    def test_stale_patient_transcript_cannot_cancel_or_suppress_new_response(self):
+        old_response = "response-old"
+        new_response = "response-new"
+        twilio = FakeTwilioWebSocket((self.connected(), self.start()))
+        openai = FakeOpenAIConnection(
+            (
+                self.response_created(old_response),
+                self.response_done(old_response),
+                self.response_created(new_response),
+                self.output_transcript_delta(
+                    "Please transfer me.",
+                    event_id="event-stale-output-delta",
+                    response_id=old_response,
+                ),
+                self.output_transcript_done(
+                    "Please transfer me.",
+                    event_id="event-stale-output-done",
+                    response_id=old_response,
+                ),
+                self.delta(
+                    event_id="event-new-response-audio",
+                    response_id=new_response,
+                ),
+            ),
+            on_empty=lambda: twilio.add_message(self.stop()),
+        )
+
+        with self.assertLogs("realtime_bridge", level="INFO") as logs:
+            self.run_bridge(twilio, openai)
+
+        self.assertEqual(
+            [json.loads(message)["event"] for message in twilio.sent],
+            ["media"],
+        )
+        sent = [json.loads(message) for message in openai.sent]
+        self.assertFalse(
+            any(event["type"] == "response.cancel" for event in sent)
+        )
+        self.assertIn("openai_responses_cancelled=0", logs.output[0])
+
+    def test_nonterminal_completed_text_recovers_provisional_stream_match(self):
+        item_id = "item-corrected-input"
+        new_response = "response-after-correction"
+        twilio = FakeTwilioWebSocket((self.connected(), self.start()))
+        openai = FakeOpenAIConnection(
+            (
+                self.response_created(),
+                self.delta(event_id="event-before-correction"),
+                self.input_transcript_delta(
+                    "Transferring you now.",
+                    event_id="event-provisional-transfer",
+                    item_id=item_id,
+                ),
+                self.input_transcript(
+                    "I'm not transferring you now.",
+                    event_id="event-corrected-completion",
+                    item_id=item_id,
+                ),
+                self.response_created(new_response),
+                self.delta(
+                    event_id="event-after-correction",
+                    response_id=new_response,
+                ),
+            ),
+            on_empty=lambda: twilio.add_message(self.stop()),
+        )
+
+        self.run_bridge(twilio, openai)
+
+        self.assertEqual(
+            [json.loads(message)["event"] for message in twilio.sent],
+            ["media", "clear", "media"],
+        )
+
+    def test_transfer_and_event_id_state_are_isolated_per_call(self):
+        shared_event_id = "event-shared-across-calls"
+        first_twilio = FakeTwilioWebSocket((self.connected(), self.start()))
+        first_openai = FakeOpenAIConnection(
+            (
+                self.input_transcript(
+                    "I am transferring you now.", event_id=shared_event_id
+                ),
+            ),
+            on_empty=lambda: first_twilio.add_message(self.stop()),
+        )
+        self.run_bridge(first_twilio, first_openai)
+
+        second_twilio = FakeTwilioWebSocket((self.connected(), self.start()))
+        second_openai = FakeOpenAIConnection(
+            (self.delta(event_id=shared_event_id),),
+            on_empty=lambda: second_twilio.add_message(self.stop()),
+        )
+        self.run_bridge(second_twilio, second_openai)
+
+        self.assertEqual(
+            [json.loads(message)["event"] for message in second_twilio.sent],
+            ["media"],
+        )
+
+    def test_event_id_window_is_bounded_and_retains_recent_duplicates(self):
+        event_ids = realtime_bridge._BoundedEventIds(3)
+
+        self.assertTrue(event_ids.remember("event-1"))
+        self.assertTrue(event_ids.remember("event-2"))
+        self.assertTrue(event_ids.remember("event-3"))
+        self.assertFalse(event_ids.remember("event-2"))
+        self.assertTrue(event_ids.remember("event-4"))
+        self.assertEqual(len(event_ids), 3)
+        self.assertTrue(event_ids.remember("event-1"))
+        self.assertEqual(len(event_ids), 3)
+        with self.assertRaisesRegex(ValueError, "Realtime audio bridge failed"):
+            event_ids.remember("x" * 257)
+
+    def test_transcript_delta_merge_handles_fragment_repeat_and_cumulative_text(self):
+        self.assertEqual(
+            realtime_bridge._merge_transcript_delta("Transferring ", "you now."),
+            "Transferring you now.",
+        )
+        self.assertEqual(
+            realtime_bridge._merge_transcript_delta("Trans", "Trans"),
+            "Trans",
+        )
+        self.assertEqual(
+            realtime_bridge._merge_transcript_delta("Trans", "Transferring "),
+            "Transferring ",
+        )
+        self.assertEqual(
+            realtime_bridge._merge_transcript_delta(
+                "Transferring y", "you now."
+            ),
+            "Transferring you now.",
+        )
+        with self.assertRaisesRegex(ValueError, "Realtime audio bridge failed"):
+            realtime_bridge._merge_transcript_delta(
+                "x" * realtime_bridge._MAX_TRANSIENT_TRANSCRIPT_LENGTH,
+                "y",
+            )
+
+    def test_missing_event_id_fails_privately(self):
+        event = json.loads(self.delta())
+        del event["event_id"]
+        self.assert_private_failure(
+            FakeTwilioWebSocket((self.connected(), self.start())),
+            FakeOpenAIConnection((json.dumps(event),), end_when_empty=True),
+            realtime_bridge.RealtimeBridgeInternalError,
+        )
+
+    def test_ga_audio_event_relays_end_to_end_with_counter_only_diagnostics(self):
+        twilio = FakeTwilioWebSocket(
+            (
+                self.connected(),
+                self.start(),
+                self.media(self.payload_one),
+                self.media(self.payload_two),
+            )
+        )
+        openai = FakeOpenAIConnection(
+            (self.delta(),), on_empty=lambda: twilio.add_message(self.stop())
+        )
+
+        with self.assertLogs("realtime_bridge", level="INFO") as logs:
+            result = self.run_bridge(twilio, openai)
+
+        self.assertEqual(result, "stopped")
+        self.assertEqual(
+            [json.loads(message) for message in twilio.sent],
+            [
+                {
+                    "event": "media",
+                    "streamSid": self.stream_sid,
+                    "media": {"payload": self.payload_one},
+                }
+            ],
+        )
+        diagnostic = logs.output[0]
+        for expected in (
+            "twilio_inbound_audio_frames=2",
+            "twilio_inbound_audio_bytes=8",
+            "openai_input_audio_appends=2",
+            "openai_output_audio_delta_frames=1",
+            "openai_output_audio_delta_bytes=4",
+            "twilio_outbound_media_frames=1",
+            "twilio_outbound_media_bytes=4",
+            "twilio_clear_messages_sent=0",
+            "provider_error_event_types=none",
+        ):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, diagnostic)
+        for private_value in (
+            self.payload_one,
+            self.payload_two,
+            self.account_sid,
+            self.stream_sid,
+            self.call_sid,
+        ):
+            self.assertNotIn(private_value, diagnostic)
+
+    def test_provider_error_is_counted_privately_and_fails_bridge(self):
+        private_detail = "private-provider-detail"
+        provider_error = json.dumps(
+            {
+                "type": "error",
+                "event_id": "event-fictional-error",
+                "error": {
+                    "type": "invalid_request_error",
+                    "code": "invalid_value",
+                    "message": private_detail,
+                    "param": "session.audio.output.format.rate",
+                },
+            }
+        )
+        twilio = FakeTwilioWebSocket((self.connected(), self.start()))
+        openai = FakeOpenAIConnection((provider_error,), end_when_empty=True)
+
+        with self.assertLogs("realtime_bridge", level="INFO") as logs:
+            with self.assertRaises(
+                realtime_bridge.RealtimeBridgeInternalError
+            ) as raised:
+                self.run_bridge(twilio, openai)
+
+        self.assertEqual(str(raised.exception), "Realtime audio bridge failed.")
+        diagnostic = logs.output[0]
+        self.assertIn(
+            "provider_error_event_types=invalid_request_error:1", diagnostic
+        )
+        self.assertNotIn(private_detail, diagnostic)
+        self.assertNotIn("session.audio.output.format.rate", diagnostic)
+
+    def test_speech_started_does_not_clear_when_interruption_is_disabled(self):
+        twilio = FakeTwilioWebSocket((self.connected(), self.start()))
+        openai = FakeOpenAIConnection(
+            (self.speech_started(),),
+            on_empty=lambda: twilio.add_message(self.stop()),
+        )
+
+        with self.assertLogs("realtime_bridge", level="INFO") as logs:
+            self.run_bridge(twilio, openai)
+
+        self.assertEqual(twilio.sent, [])
+        self.assertIn("openai_speech_started_events=1", logs.output[0])
+        self.assertIn("twilio_clear_messages_sent=0", logs.output[0])
+
+    def test_output_audio_is_marked_and_not_truncated_before_playback(self):
+        twilio = FakeTwilioWebSocket((self.connected(), self.start()))
+
+        def finish_playback():
+            twilio.add_message(self.mark())
+            twilio.add_message(self.stop())
+
+        openai = FakeOpenAIConnection(
+            (self.delta(), self.speech_started(), self.audio_done()),
+            on_empty=finish_playback,
+        )
+
+        with self.assertLogs("realtime_bridge", level="INFO") as logs:
+            result = self.run_bridge(twilio, openai)
+
+        self.assertEqual(result, "stopped")
+        self.assertEqual(
+            [json.loads(message) for message in twilio.sent],
+            [
+                {
+                    "event": "media",
+                    "streamSid": self.stream_sid,
+                    "media": {"payload": self.payload_one},
+                },
+                {
+                    "event": "mark",
+                    "streamSid": self.stream_sid,
+                    "mark": {"name": "response_1_played"},
+                },
+            ],
+        )
+        diagnostic = logs.output[0]
+        for expected in (
+            "openai_output_audio_done_events=1",
+            "twilio_playback_marks_sent=1",
+            "twilio_playback_marks_acknowledged=1",
+            "twilio_playback_marks_pending=0",
+            "twilio_clear_messages_sent=0",
+        ):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, diagnostic)
+
     def test_well_formed_unused_openai_event_is_ignored(self):
-        unused = json.dumps({"type": "response.created", "response": {}})
+        unused = json.dumps({"type": "rate_limits.updated", "rate_limits": []})
         twilio = FakeTwilioWebSocket((self.connected(), self.start()))
         openai = FakeOpenAIConnection(
             (unused, self.delta()),
@@ -382,6 +1348,33 @@ class RealtimeBridgeTests(unittest.TestCase):
                     "item_id": "item-fictional",
                 }
             ),
+            json.dumps(
+                {
+                    "type": "response.output_audio.done",
+                    "event_id": "private-provider-detail",
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "conversation.item.input_audio_transcription.delta",
+                    "event_id": "private-provider-detail",
+                    "delta": "private-provider-detail",
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "response.output_audio_transcript.delta",
+                    "event_id": "private-provider-detail",
+                    "delta": "private-provider-detail",
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "response.output_audio_transcript.done",
+                    "event_id": "private-provider-detail",
+                    "transcript": "private-provider-detail",
+                }
+            ),
         )
         for message in malformed_events:
             with self.subTest(message=message):
@@ -511,13 +1504,20 @@ class RealtimeBridgeTests(unittest.TestCase):
                     .openai_speech_started_to_twilio_clear
                 ),
             ) as interruption_adapter,
+            patch.object(
+                realtime_bridge.openai_realtime_protocol,
+                "parse_input_audio_buffer_speech_started",
+                wraps=(
+                    realtime_bridge.openai_realtime_protocol
+                    .parse_input_audio_buffer_speech_started
+                ),
+            ) as speech_parser,
         ):
             self.run_bridge(twilio, openai)
 
         audio_relay_adapter.assert_called_once_with(delta, self.stream_sid)
-        interruption_adapter.assert_called_once_with(
-            speech_started, self.stream_sid
-        )
+        speech_parser.assert_called_once_with(speech_started)
+        interruption_adapter.assert_not_called()
 
     def test_import_has_no_configuration_connection_or_task_side_effect(self):
         with (

@@ -2,7 +2,13 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from call_safety import ASSESSMENT_DESTINATION
-from outbound_call import build_twilio_client, create_assessment_call
+from outbound_call import (
+    RECORDING_CHANNEL_ROLES,
+    RECORDING_CHANNELS,
+    RECORDING_TRACK,
+    build_twilio_client,
+    create_assessment_call,
+)
 
 
 class OutboundCallTests(unittest.TestCase):
@@ -23,7 +29,6 @@ class OutboundCallTests(unittest.TestCase):
             self.settings,
             "schedule_routine_visit",
         )
-
         self.assertEqual(result, "CAfictionalcallsid")
         self.client.calls.create.assert_called_once_with(
             to=ASSESSMENT_DESTINATION,
@@ -44,6 +49,13 @@ class OutboundCallTests(unittest.TestCase):
             ),
             recording_status_callback_method="POST",
             recording_status_callback_event=["completed"],
+        )
+
+    def test_recording_configuration_and_role_mapping_stay_aligned(self):
+        self.assertEqual(RECORDING_CHANNELS, "dual")
+        self.assertEqual(RECORDING_TRACK, "both")
+        self.assertEqual(
+            RECORDING_CHANNEL_ROLES, ("Remote side", "Patient bot")
         )
 
     def test_only_fixed_destination_is_validated_and_used(self):

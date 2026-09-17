@@ -20,6 +20,9 @@ _SCENARIOS = {
         goal="schedule a routine annual physical",
         known_facts=("Prefers Tuesday or Thursday after 2:00 PM.",),
         opening_line="Hi, I'd like to schedule an annual physical.",
+        conversation_guidance=(
+            "Do not introduce fasting, labs, paperwork, arrival time, medications, records, or other preparation questions unless the healthcare agent explicitly asks about them.",
+        ),
     ),
     "reschedule_existing_appointment": PatientScenario(
         scenario_id="reschedule_existing_appointment",
@@ -169,22 +172,36 @@ Scenario:
 {guidance}
 - Opening line: {scenario.opening_line}
 
-Begin with the opening line. Speak naturally in concise, conversational turns,
-while aiming for an overall conversation of 90 to 150 seconds when the agent
-continues to engage. Reveal the known facts gradually when they are relevant
-instead of reciting them. Listen and adapt to the healthcare agent's questions.
+Remain silent during any recording disclosure or introductory announcement.
+Do not treat that announcement as a prompt and do not begin the opening line
+yet. Wait for the healthcare agent's first substantive question or invitation
+to speak.
+Begin with the opening line. Respond concisely, normally in one or two
+sentences. Answer the healthcare agent's current question directly. Reveal the
+known facts gradually when they are relevant instead of reciting them. Listen
+and adapt to the healthcare agent's questions.
 Preserve natural turn-taking pauses: wait until the healthcare agent finishes
 speaking before responding, and never interrupt or talk over it. Silence while
-listening is acceptable; the duration target does not mean continuous speech.
-Give realistic answers and ask or answer appropriate follow-up questions based
-only on the goal and known facts. Ask for clarification when needed. Do not end
-the conversation immediately after the first answer or tentative outcome;
-before ending, confirm the outcome or next step and address any reasonable
-unresolved detail. Do not repeat yourself, stall, or use filler merely to extend
-the call. Never invent unknown personal or medical details. If the scenario
-does not provide requested information, say that you do not have that
-information. Continue until the goal and reasonable follow-ups are completed or
-the agent gives a clear barrier. Never claim there is a real emergency or that
-a real appointment was created. Do not volunteer that this is a test,
-simulation, or AI-generated role-play.
+listening is acceptable. Give realistic answers based only on the goal and
+known facts. Ask at most one follow-up question, and only when necessary to
+achieve the scenario outcome. Ask for clarification when needed. Do not repeat
+already-confirmed details. If the agent asks you to wait or says it is looking
+something up, acknowledge that at most once, then remain silent until it asks a
+new substantive question or provides new information. Never repeat a holding
+acknowledgement. A question or offer about whether to transfer is not a transfer
+action; answer it normally. If you request or accept a transfer, use one short
+sentence only, and finish it as a grammatically and semantically complete
+thought. Include any destination or object required by the verb; never stop on
+an unfinished clause or dangling preposition. Do not add an explanation,
+prediction, or follow-up after that request or acceptance. Only after the agent
+clearly confirms that the transfer is actively starting, do not respond; remain
+silent during the transfer and any
+greeting or announcement on the new line. Once the outcome and next step are
+clearly confirmed, briefly acknowledge
+them and end the call naturally. Never invent
+unknown personal or medical details. If the scenario does not provide
+requested information, say that you do not have that information. If the agent
+gives a clear barrier, acknowledge it briefly and end the call. Never claim
+there is a real emergency or that a real appointment was created. Do not
+volunteer that this is a test, simulation, or AI-generated role-play.
 """

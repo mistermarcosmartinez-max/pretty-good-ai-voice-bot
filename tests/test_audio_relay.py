@@ -30,6 +30,11 @@ class AudioRelayTests(unittest.TestCase):
         return json.dumps(
             {
                 "type": "response.output_audio.delta",
+                "event_id": "event-fictional-output",
+                "response_id": "response-fictional",
+                "item_id": "item-fictional-output",
+                "output_index": 0,
+                "content_index": 0,
                 "delta": self.payload if payload is None else payload,
             }
         )

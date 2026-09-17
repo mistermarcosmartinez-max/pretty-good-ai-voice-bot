@@ -26,6 +26,10 @@ def _is_nonempty_string(value):
     return isinstance(value, str) and bool(value.strip())
 
 
+def _is_text_delta(value):
+    return isinstance(value, str) and value != ""
+
+
 def _is_strict_base64(payload):
     return (
         _is_nonempty_string(payload)
@@ -68,11 +72,22 @@ def build_session_update(scenario_id, model, voice):
             "instructions": build_patient_prompt(scenario),
             "audio": {
                 "input": {
-                    "format": {"type": "audio/pcmu", "rate": 8000},
-                    "turn_detection": {"type": "semantic_vad"},
+                    "format": {"type": "audio/pcmu"},
+                    "transcription": {
+                        "model": "gpt-4o-mini-transcribe",
+                        "language": "en",
+                    },
+                    "turn_detection": {
+                        "type": "server_vad",
+                        "threshold": 0.5,
+                        "prefix_padding_ms": 300,
+                        "silence_duration_ms": 900,
+                        "create_response": True,
+                        "interrupt_response": False,
+                    },
                 },
                 "output": {
-                    "format": {"type": "audio/pcmu", "rate": 8000},
+                    "format": {"type": "audio/pcmu"},
                     "voice": voice,
                 },
             },
@@ -87,16 +102,166 @@ def build_input_audio_buffer_append(payload):
     return {"type": "input_audio_buffer.append", "audio": payload}
 
 
+def build_response_cancel(response_id):
+    """Build a targeted cancellation for one validated active response."""
+    if not _is_nonempty_string(response_id):
+        raise ValueError("Invalid Realtime response cancellation.")
+    return {"type": "response.cancel", "response_id": response_id}
+
+
+def parse_response_created(message):
+    """Return the validated ID of a newly active response."""
+    error = "Invalid Realtime response lifecycle event."
+    parsed = _parse_object(message, error)
+    response = parsed.get("response")
+    if (
+        parsed.get("type") != "response.created"
+        or not _is_nonempty_string(parsed.get("event_id"))
+        or not isinstance(response, dict)
+        or not _is_nonempty_string(response.get("id"))
+        or response.get("status") != "in_progress"
+    ):
+        raise ValueError(error)
+    return response["id"]
+
+
+def parse_response_done(message):
+    """Return the validated ID of a terminal response."""
+    error = "Invalid Realtime response lifecycle event."
+    parsed = _parse_object(message, error)
+    response = parsed.get("response")
+    if (
+        parsed.get("type") != "response.done"
+        or not _is_nonempty_string(parsed.get("event_id"))
+        or not isinstance(response, dict)
+        or not _is_nonempty_string(response.get("id"))
+        or response.get("status")
+        not in ("completed", "cancelled", "failed", "incomplete")
+    ):
+        raise ValueError(error)
+    return response["id"]
+
+
+def parse_input_audio_transcription_completed(message):
+    """Return only validated input transcript text for transient routing."""
+    error = "Invalid Realtime input transcription event."
+    parsed = _parse_object(message, error)
+    content_index = parsed.get("content_index")
+    if (
+        parsed.get("type")
+        != "conversation.item.input_audio_transcription.completed"
+        or not _is_nonempty_string(parsed.get("event_id"))
+        or not _is_nonempty_string(parsed.get("item_id"))
+        or type(content_index) is not int
+        or content_index < 0
+        or not _is_nonempty_string(parsed.get("transcript"))
+    ):
+        raise ValueError(error)
+    return parsed["transcript"]
+
+
+def parse_input_audio_transcription_delta(message):
+    """Return an input item ID and validated streaming transcript delta."""
+    error = "Invalid Realtime input transcription event."
+    parsed = _parse_object(message, error)
+    content_index = parsed.get("content_index")
+    delta = parsed.get("delta")
+    if (
+        parsed.get("type")
+        != "conversation.item.input_audio_transcription.delta"
+        or not _is_nonempty_string(parsed.get("event_id"))
+        or not _is_nonempty_string(parsed.get("item_id"))
+        or (
+            content_index is not None
+            and (type(content_index) is not int or content_index < 0)
+        )
+        or (delta is not None and not isinstance(delta, str))
+    ):
+        raise ValueError(error)
+    return parsed["item_id"], delta
+
+
+def parse_response_output_audio_transcript_delta(message):
+    """Return validated response identity and streaming transcript text."""
+    error = "Invalid Realtime output transcription event."
+    parsed = _parse_object(message, error)
+    output_index = parsed.get("output_index")
+    content_index = parsed.get("content_index")
+    if (
+        parsed.get("type") != "response.output_audio_transcript.delta"
+        or not _is_nonempty_string(parsed.get("event_id"))
+        or not _is_nonempty_string(parsed.get("response_id"))
+        or not _is_nonempty_string(parsed.get("item_id"))
+        or type(output_index) is not int
+        or output_index < 0
+        or type(content_index) is not int
+        or content_index < 0
+        or not _is_text_delta(parsed.get("delta"))
+    ):
+        raise ValueError(error)
+    return parsed["response_id"], parsed["delta"]
+
+
+def parse_response_output_audio_transcript_done(message):
+    """Return validated response identity and completed transcript text."""
+    error = "Invalid Realtime output transcription event."
+    parsed = _parse_object(message, error)
+    output_index = parsed.get("output_index")
+    content_index = parsed.get("content_index")
+    if (
+        parsed.get("type") != "response.output_audio_transcript.done"
+        or not _is_nonempty_string(parsed.get("event_id"))
+        or not _is_nonempty_string(parsed.get("response_id"))
+        or not _is_nonempty_string(parsed.get("item_id"))
+        or type(output_index) is not int
+        or output_index < 0
+        or type(content_index) is not int
+        or content_index < 0
+        or not _is_nonempty_string(parsed.get("transcript"))
+    ):
+        raise ValueError(error)
+    return parsed["response_id"], parsed["transcript"]
+
+
 def parse_response_output_audio_delta(message):
     """Return only a validated base64 delta from an output audio event."""
     error = "Invalid Realtime output audio event."
     parsed = _parse_object(message, error)
+    output_index = parsed.get("output_index")
+    content_index = parsed.get("content_index")
     if (
         parsed.get("type") != "response.output_audio.delta"
+        or not _is_nonempty_string(parsed.get("event_id"))
+        or not _is_nonempty_string(parsed.get("response_id"))
+        or not _is_nonempty_string(parsed.get("item_id"))
+        or type(output_index) is not int
+        or output_index < 0
+        or type(content_index) is not int
+        or content_index < 0
         or not _is_strict_base64(parsed.get("delta"))
     ):
         raise ValueError(error)
     return parsed["delta"]
+
+
+def parse_response_output_audio_done(message):
+    """Recognize completion of one output-audio part without retaining data."""
+    error = "Invalid Realtime output audio event."
+    parsed = _parse_object(message, error)
+    output_index = parsed.get("output_index")
+    content_index = parsed.get("content_index")
+    if (
+        parsed.get("type") != "response.output_audio.done"
+        or not _is_nonempty_string(parsed.get("event_id"))
+        or not _is_nonempty_string(parsed.get("response_id"))
+        or not _is_nonempty_string(parsed.get("item_id"))
+        or type(output_index) is not int
+        or output_index < 0
+        or type(content_index) is not int
+        or content_index < 0
+    ):
+        raise ValueError(error)
+    return True
 
 
 def parse_input_audio_buffer_speech_started(message):

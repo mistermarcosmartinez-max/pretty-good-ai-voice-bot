@@ -9,6 +9,7 @@ from media_protocol import (
     build_media_message,
     parse_connected_message,
     parse_inbound_media_message,
+    parse_mark_message,
     parse_start_message,
     parse_stop_message,
 )
@@ -54,6 +55,15 @@ class MediaProtocolTests(unittest.TestCase):
         return json.dumps(
             {"event": "media", "streamSid": self.stream_sid, "media": media}
         )
+
+    def mark_message(self, name="response_1_played", **changes):
+        message = {
+            "event": "mark",
+            "streamSid": self.stream_sid,
+            "mark": {"name": name},
+        }
+        message.update(changes)
+        return json.dumps(message)
 
     def assert_private_error(self, function, *args):
         supplied_values = (
@@ -265,6 +275,23 @@ class MediaProtocolTests(unittest.TestCase):
                     parse_stop_message, message, self.stream_sid
                 )
 
+    def test_playback_mark_returns_only_validated_local_label(self):
+        result = parse_mark_message(self.mark_message(), self.stream_sid)
+        self.assertEqual(result.name, "response_1_played")
+        with self.assertRaises(FrozenInstanceError):
+            result.name = "changed"
+
+        for message in (
+            self.mark_message(name="unsafe name"),
+            self.mark_message(streamSid="MZwrong-stream-sentinel"),
+            self.mark_message(event="media"),
+            "submitted-message-sentinel",
+        ):
+            with self.subTest(message=message):
+                self.assert_private_error(
+                    parse_mark_message, message, self.stream_sid
+                )
+
     def test_builders_return_exact_twilio_message_dictionaries(self):
         self.assertEqual(
             build_media_message(self.stream_sid, self.payload),
@@ -327,6 +354,7 @@ class MediaProtocolSessionTests(unittest.TestCase):
     connected_message = MediaProtocolTests.connected_message
     start_message = MediaProtocolTests.start_message
     media_message = MediaProtocolTests.media_message
+    mark_message = MediaProtocolTests.mark_message
     assert_private_error = MediaProtocolTests.assert_private_error
 
     def new_session(self):
@@ -353,6 +381,10 @@ class MediaProtocolSessionTests(unittest.TestCase):
 
         self.assertEqual(session.process_message(self.media_message()), self.payload)
         self.assertEqual(session.process_message(self.media_message()), self.payload)
+        self.assertEqual(
+            session.process_message(self.mark_message()).name,
+            "response_1_played",
+        )
         self.assertIsNone(
             session.process_message(
                 json.dumps({"event": "stop", "streamSid": self.stream_sid})

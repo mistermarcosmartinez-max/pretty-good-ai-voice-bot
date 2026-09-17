@@ -92,31 +92,44 @@ class PatientScenarioTests(unittest.TestCase):
 
     def test_prompt_contains_scenario_and_required_instructions(self):
         prompt = build_patient_prompt(self.scenario)
+        normalized_prompt = " ".join(prompt.split())
         required_text = (
             "You are a fictional patient in an evaluation conversation.",
-            "Speak naturally in concise, conversational turns",
-            "90 to 150 seconds",
-            "Reveal the known facts gradually when they are relevant\ninstead of reciting them",
+            "Remain silent during any recording disclosure or introductory announcement",
+            "Do not treat that announcement as a prompt",
+            "first substantive question or invitation to speak",
+            "Respond concisely, normally in one or two sentences",
+            "Answer the healthcare agent's current question directly",
+            "Reveal the known facts gradually when they are relevant instead of reciting them",
             "Listen and adapt to the healthcare agent's questions",
             "Preserve natural turn-taking pauses",
-            "wait until the healthcare agent finishes\nspeaking before responding",
+            "wait until the healthcare agent finishes speaking before responding",
             "never interrupt or talk over it",
-            "Silence while\nlistening is acceptable",
-            "duration target does not mean continuous speech",
-            "ask or answer appropriate follow-up questions based\nonly on the goal and known facts",
+            "Silence while listening is acceptable",
+            "Ask at most one follow-up question",
+            "only when necessary to achieve the scenario outcome",
             "Ask for clarification when needed",
-            "Do not end\nthe conversation immediately after the first answer or tentative outcome",
-            "confirm the outcome or next step",
-            "Do not repeat yourself, stall, or use filler merely to extend\nthe call",
+            "Do not repeat already-confirmed details",
+            "acknowledge that at most once",
+            "Never repeat a holding acknowledgement",
+            "remain silent during the transfer and any greeting or announcement on the new line",
+            "A question or offer about whether to transfer is not a transfer action",
+            "If you request or accept a transfer, use one short sentence only",
+            "grammatically and semantically complete thought",
+            "never stop on an unfinished clause or dangling preposition",
+            "Do not add an explanation, prediction, or follow-up",
+            "Only after the agent clearly confirms that the transfer is actively starting",
+            "Once the outcome and next step are clearly confirmed",
+            "briefly acknowledge them and end the call naturally",
             "Never invent unknown personal or medical details",
-            "say that you do not have that\ninformation",
-            "until the goal and reasonable follow-ups are completed or\nthe agent gives a clear barrier",
-            "Never claim there is a real emergency or that\na real appointment was created",
-            "Do not volunteer that this is a test,\nsimulation, or AI-generated role-play",
+            "say that you do not have that information",
+            "If the agent gives a clear barrier, acknowledge it briefly and end the call",
+            "Never claim there is a real emergency or that a real appointment was created",
+            "Do not volunteer that this is a test, simulation, or AI-generated role-play",
         )
         for text in required_text:
             with self.subTest(text=text):
-                self.assertIn(text, prompt)
+                self.assertIn(text, normalized_prompt)
         for value in (
             self.scenario.patient_name,
             self.scenario.date_of_birth,
@@ -127,22 +140,58 @@ class PatientScenarioTests(unittest.TestCase):
                 self.assertIn(value, prompt)
         self.assertNotIn("offline test scenario", prompt)
 
-    def test_every_prompt_targets_natural_duration_without_filler(self):
+    def test_every_prompt_is_concise_and_ends_after_confirmed_outcome(self):
         for scenario_id in list_scenario_ids():
             prompt = build_patient_prompt(get_scenario(scenario_id))
+            normalized_prompt = " ".join(prompt.split())
             with self.subTest(scenario_id=scenario_id):
-                self.assertIn("90 to 150 seconds", prompt)
-                self.assertIn("concise, conversational turns", prompt)
-                self.assertIn("appropriate follow-up questions", prompt)
-                self.assertIn("confirm the outcome or next step", prompt)
-                self.assertIn("Do not repeat yourself, stall, or use filler", prompt)
+                self.assertNotIn("90 to 150 seconds", prompt)
+                self.assertIn(
+                    "Remain silent during any recording disclosure", prompt
+                )
+                self.assertIn("first substantive question", prompt)
+                self.assertIn("normally in one or two sentences", normalized_prompt)
+                self.assertIn("current question directly", normalized_prompt)
+                self.assertIn("at most one follow-up question", normalized_prompt)
+                self.assertIn("Do not repeat already-confirmed details", normalized_prompt)
+                self.assertIn("Never repeat a holding acknowledgement", normalized_prompt)
+                self.assertIn(
+                    "question or offer about whether to transfer is not a transfer action",
+                    normalized_prompt,
+                )
+                self.assertIn(
+                    "If you request or accept a transfer, use one short sentence only",
+                    normalized_prompt,
+                )
+                self.assertIn(
+                    "grammatically and semantically complete thought",
+                    normalized_prompt,
+                )
+                self.assertIn(
+                    "Only after the agent clearly confirms that the transfer is actively starting",
+                    normalized_prompt,
+                )
+                self.assertIn("end the call naturally", normalized_prompt)
                 self.assertIn("Preserve natural turn-taking pauses", prompt)
                 self.assertIn("never interrupt or talk over it", prompt)
-                self.assertIn("Silence while\nlistening is acceptable", prompt)
-                self.assertIn(
-                    "duration target does not mean continuous speech", prompt
-                )
-                self.assertNotIn("Speak naturally and briefly", prompt)
+                self.assertIn("Silence while listening is acceptable", normalized_prompt)
+
+    def test_routine_visit_does_not_volunteer_preparation_topics(self):
+        guidance = " ".join(self.scenario.conversation_guidance)
+        for topic in (
+            "fasting",
+            "labs",
+            "paperwork",
+            "arrival time",
+            "medications",
+            "records",
+            "other preparation questions",
+        ):
+            with self.subTest(topic=topic):
+                self.assertIn(topic, guidance)
+        self.assertIn(
+            "unless the healthcare agent explicitly asks about them", guidance
+        )
 
     def test_every_prompt_contains_its_facts_and_guidance(self):
         for scenario_id in list_scenario_ids():
